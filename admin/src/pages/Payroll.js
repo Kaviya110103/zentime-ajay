@@ -1,0 +1,2611 @@
+﻿
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Container,
+  Typography,
+  TextField,
+  Button,
+  Paper,
+  Box,
+  Grid,
+  LinearProgress,
+  Alert,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Snackbar,
+  IconButton,
+  useTheme,
+  useMediaQuery,
+  Tooltip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  FormControlLabel,
+  Radio,
+  RadioGroup,
+  Chip,
+} from "@mui/material";
+
+import { DatePicker } from "@mui/x-date-pickers/DatePicker";
+import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { getMonth, getYear, format, parseISO, isValid, parse } from "date-fns";
+import PrintIcon from "@mui/icons-material/Print";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import PhoneIcon from "@mui/icons-material/Phone";
+import BusinessIcon from "@mui/icons-material/Business";
+import WorkIcon from "@mui/icons-material/Work";
+import EmailIcon from "@mui/icons-material/Email";
+import Avatar from "@mui/material/Avatar";
+import { API_BASE_URL, resolveBackendAssetUrl } from "../config/api";
+
+function EmployeePayrollViewer() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  const SHOW_PF_SECTION = false;
+  const defaultPaymentDetails = {
+    convenience: 0,
+    ot: 0,
+    lop: 0,
+    incentives: 0,
+    advance: 0,
+    others: 0,
+    pfAmount: 0,
+    pfPercentage: 0,
+  };
+
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [employeeId, setEmployeeId] = useState("");
+  const [selectedBranch, setSelectedBranch] = useState("");
+  const [employeeDirectory, setEmployeeDirectory] = useState([]);
+  const [netSalary, setNetSalary] = useState(null);
+  const [openSnackbar, setOpenSnackbar] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceError, setAttendanceError] = useState(null);
+  const [holidayDateSet, setHolidayDateSet] = useState(new Set());
+  const [paymentDetails, setPaymentDetails] = useState({ ...defaultPaymentDetails });
+  const [additionalAllowances, setAdditionalAllowances] = useState([
+    { name: "", amount: 0 },
+  ]);
+  const [logoFile, setLogoFile] = useState(null);
+  const [logoUploaded, setLogoUploaded] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [payslipPreviewOpen, setPayslipPreviewOpen] = useState(false);
+  const [includeOvertime, setIncludeOvertime] = useState(false);
+
+  const resetPayrollComputation = () => {
+    setData(null);
+    setNetSalary(null);
+    setEmailSent(false);
+    setError(null);
+    setAttendanceError(null);
+    setAttendanceRecords([]);
+    setPaymentDetails({ ...defaultPaymentDetails });
+    setAdditionalAllowances([{ name: "", amount: 0 }]);
+    setOpenSnackbar(false);
+    setPayslipPreviewOpen(false);
+    setIncludeOvertime(false);
+  };
+
+  const normalizeEmployeeIdRef = (value) => {
+    const normalized = (value || "").trim();
+    if (!normalized) return "";
+    if (/^\d+$/.test(normalized)) return normalized;
+    const match = normalized.match(/(?:^|\.)EMP(\d+)$/i);
+    if (match?.[1]) return match[1];
+    return normalized;
+  };
+
+  const getEmployeeDisplayName = (employee) => {
+    if (!employee) return "Unnamed Employee";
+    const firstName = String(employee.firstName || "").trim();
+    const lastName = String(employee.lastName || "").trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName) return fullName;
+    const fallbackName = String(employee.name || "").trim();
+    if (fallbackName) return fallbackName;
+    return "Unnamed Employee";
+  };
+
+  const getEmployeeLookupValue = (employee) => {
+    if (!employee) return "";
+    const preferredValue =
+      employee.employeeId ??
+      employee.id ??
+      employee.employeeCode ??
+      employee.code;
+    return preferredValue == null ? "" : String(preferredValue).trim();
+  };
+
+  const employeeNameOptions = useMemo(() => {
+    const unique = new Map();
+    employeeDirectory
+      .filter((employee) => {
+        if (!selectedBranch) return true;
+        return String(employee?.branch || "").trim().toLowerCase()
+          === String(selectedBranch).trim().toLowerCase();
+      })
+      .forEach((employee) => {
+      const value = getEmployeeLookupValue(employee);
+      if (!value || unique.has(value)) return;
+
+      const idPart = employee?.employeeId ?? employee?.id;
+      const codePart = employee?.employeeCode || employee?.code;
+      const badge = idPart != null
+        ? `ID: ${idPart}`
+        : codePart
+        ? `Code: ${codePart}`
+        : null;
+
+      unique.set(value, {
+        value,
+        label: badge
+          ? `${getEmployeeDisplayName(employee)} (${badge})`
+          : getEmployeeDisplayName(employee),
+      });
+    });
+    return Array.from(unique.values()).sort((left, right) =>
+      left.label.localeCompare(right.label)
+    );
+  }, [employeeDirectory, selectedBranch]);
+
+  const branchOptions = useMemo(() => {
+    const unique = new Set();
+    employeeDirectory.forEach((employee) => {
+      const branch = String(employee?.branch || "").trim();
+      if (branch) unique.add(branch);
+    });
+    return Array.from(unique).sort((left, right) => left.localeCompare(right));
+  }, [employeeDirectory]);
+
+  const selectedEmployeeNameValue = useMemo(() => {
+    const normalizedRef = normalizeEmployeeIdRef(employeeId);
+    if (!normalizedRef) return "";
+    return employeeNameOptions.some((option) => option.value === normalizedRef)
+      ? normalizedRef
+      : "";
+  }, [employeeId, employeeNameOptions]);
+
+  const employeeDirectoryIndex = useMemo(() => {
+    const byId = new Map();
+    const byEmployeeId = new Map();
+    const byCode = new Map();
+
+    employeeDirectory.forEach((employee) => {
+      if (employee?.id != null) byId.set(String(employee.id), employee);
+      if (employee?.employeeId != null) byEmployeeId.set(String(employee.employeeId), employee);
+      if (employee?.employeeCode) {
+        byCode.set(String(employee.employeeCode).toLowerCase(), employee);
+      }
+      if (employee?.code) {
+        byCode.set(String(employee.code).toLowerCase(), employee);
+      }
+    });
+
+    return { byId, byEmployeeId, byCode };
+  }, [employeeDirectory]);
+
+  const parseErrorMessage = async (response, fallbackMessage) => {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const json = await response.json();
+      return json?.message || fallbackMessage;
+    }
+
+    const text = (await response.text())?.trim();
+    return text || fallbackMessage;
+  };
+
+  const formatINR = (value) =>
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+    }).format(Number(value || 0));
+
+  const formatHoursAndMinutes = (value) => {
+    const hoursValue = Number(value || 0);
+    const totalMinutes = Math.round(hoursValue * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = Math.abs(totalMinutes % 60);
+    return `${hours} hrs ${minutes} mins`;
+  };
+
+  const formatMinutesAsHoursAndMinutes = (value) => {
+    const totalMinutes = Math.max(0, Math.round(Number(value || 0)));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${hours} hrs ${minutes} mins`;
+  };
+
+  const formatWeekOffDay = (value) => {
+    if (!value) return "Not configured";
+    const raw = String(value).trim();
+    if (!raw) return "Not configured";
+    return raw
+      .toLowerCase()
+      .split(/[\s_]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  };
+
+  const formatShiftWindow = (startTime, endTime) => {
+    if (!startTime || !endTime) return "Not configured";
+    return `${startTime} - ${endTime}`;
+  };
+
+  const resolveProfileImageUrl = resolveBackendAssetUrl;
+
+  const additionalWorkingDaysSource = Array.isArray(data?.additionalWorkingDays)
+    ? data.additionalWorkingDays
+    : Array.isArray(data?.employee?.additionalWorkingDays)
+    ? data.employee.additionalWorkingDays
+    : [];
+
+  const additionalWorkingDays = additionalWorkingDaysSource
+    .map((day) => ({
+      dayType: String(day?.dayType || "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "_"),
+      label: String(day?.label || "").trim(),
+      timeIn: day?.timeIn || "",
+      timeOut: day?.timeOut || "",
+    }))
+    .filter((day) => day.dayType || day.label || day.timeIn || day.timeOut)
+    .sort((a, b) => {
+        const order = {
+          ODD_SATURDAY: 1,
+          EVEN_SATURDAY: 2,
+          ODD_SUNDAY: 3,
+          EVEN_SUNDAY: 4,
+        };
+        const left = order[a?.dayType] || 99;
+        const right = order[b?.dayType] || 99;
+        return left - right;
+      });
+
+  const parseRecordDate = (dateString) => {
+    if (!dateString) return null;
+    const isoDate = parseISO(dateString);
+    if (isValid(isoDate)) return isoDate;
+    const ddMMyyyy = parse(dateString, "dd/MM/yyyy", new Date());
+    if (isValid(ddMMyyyy)) return ddMMyyyy;
+    const ddMMyyyyDash = parse(dateString, "dd-MM-yyyy", new Date());
+    if (isValid(ddMMyyyyDash)) return ddMMyyyyDash;
+    return null;
+  };
+
+  const parseRecordDateTime = (value) => {
+    if (!value) return null;
+    const isoDate = parseISO(value);
+    if (isValid(isoDate)) return isoDate;
+    const timeWithSeconds = parse(value, "HH:mm:ss", new Date());
+    if (isValid(timeWithSeconds)) return timeWithSeconds;
+    const timeWithoutSeconds = parse(value, "HH:mm", new Date());
+    if (isValid(timeWithoutSeconds)) return timeWithoutSeconds;
+    return null;
+  };
+
+  const formatAttendanceDate = (dateString) => {
+    const date = parseRecordDate(dateString);
+    return date ? format(date, "dd MMM yyyy") : dateString || "-";
+  };
+
+  const formatDayName = (dateString) => {
+    const date = parseRecordDate(dateString);
+    return date ? format(date, "EEEE") : "-";
+  };
+
+  const formatTimeValue = (value) => {
+    const time = parseRecordDateTime(value);
+    return time ? format(time, "HH:mm:ss") : value || "-";
+  };
+
+  const formatWorkingHours = (timeIn, timeOut) => {
+    const start = parseRecordDateTime(timeIn);
+    const end = parseRecordDateTime(timeOut);
+    if (!start || !end) return "-";
+    const diffMinutes = Math.floor((end - start) / 60000);
+    if (diffMinutes < 0) return "-";
+    const hours = Math.floor(diffMinutes / 60);
+    const minutes = diffMinutes % 60;
+    return `${hours}h ${minutes}m`;
+  };
+
+  const buildDateKey = (dateValue) => {
+    const parsed = parseRecordDate(dateValue);
+    return parsed ? format(parsed, "yyyy-MM-dd") : null;
+  };
+
+  const getAdditionalWorkingDayType = (dateValue) => {
+    if (!dateValue) return null;
+    const day = dateValue.getDay();
+    if (day !== 0 && day !== 6) return null;
+
+    const firstOfMonth = new Date(dateValue.getFullYear(), dateValue.getMonth(), 1);
+    let count = 0;
+    for (let d = new Date(firstOfMonth); d <= dateValue; d.setDate(d.getDate() + 1)) {
+      if (d.getDay() === day) count += 1;
+    }
+
+    const isOdd = count % 2 === 1;
+    if (day === 6) return isOdd ? "ODD_SATURDAY" : "EVEN_SATURDAY";
+    return isOdd ? "ODD_SUNDAY" : "EVEN_SUNDAY";
+  };
+
+  const hasAdditionalWorkingDay = (employee, dateValue) => {
+    if (!employee || !dateValue) return false;
+    const type = getAdditionalWorkingDayType(dateValue);
+    if (!type) return false;
+    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
+    return Array.isArray(list)
+      ? list.some((item) => String(item?.dayType || "").toUpperCase() === type)
+      : false;
+  };
+
+  const getAdditionalWorkingDayEntry = (employee, dateValue) => {
+    if (!employee || !dateValue) return null;
+    const type = getAdditionalWorkingDayType(dateValue);
+    if (!type) return null;
+    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
+    if (!Array.isArray(list)) return null;
+    return list.find((item) => String(item?.dayType || "").toUpperCase() === type) || null;
+  };
+
+  const isWeekendOffPolicy = (employee) => {
+    const policyRaw = String(employee?.leavePolicyType || "").toLowerCase();
+    const weekOffRaw = String(employee?.weekOff || "").toLowerCase();
+    if (policyRaw.includes("weekend")) return true;
+    if (policyRaw.includes("saturday") && policyRaw.includes("sunday")) return true;
+    if (weekOffRaw.includes("saturday") && weekOffRaw.includes("sunday")) return true;
+    return false;
+  };
+
+  const isWeekOffDate = (dateValue, employee) => {
+    if (!dateValue || !employee) return false;
+    const dayName = format(dateValue, "EEEE").toLowerCase();
+
+    if (isWeekendOffPolicy(employee)) {
+      if (hasAdditionalWorkingDay(employee, dateValue)) return false;
+      return dayName === "saturday" || dayName === "sunday";
+    }
+
+    const weekOffDay = String(employee.weekOff || "").toLowerCase().trim();
+    if (!weekOffDay) return false;
+    return dayName === weekOffDay;
+  };
+
+  const getDerivedAttendanceStatus = (record) => {
+    if (!record) return "-";
+    const rawStatus = String(record.attendanceStatus || "").trim();
+    const statusLower = rawStatus.toLowerCase();
+    const dayStatus = String(record.dayStatus || "").toLowerCase();
+    const recordDate = parseRecordDate(record.date);
+    const dateKey = recordDate ? format(recordDate, "yyyy-MM-dd") : null;
+    const hasPunch = Boolean(record?.timeIn || record?.timeOut);
+
+    if (dateKey && holidayDateSet.has(dateKey)) return "Holiday";
+    if (recordDate && isWeekOffDate(recordDate, record.employee)) {
+      return hasPunch ? "Present" : "Week Off";
+    }
+
+    const isWeekend = recordDate ? recordDate.getDay() === 0 || recordDate.getDay() === 6 : false;
+    const isScheduledWeekendWork = isWeekend && recordDate
+      ? hasAdditionalWorkingDay(record.employee, recordDate)
+      : false;
+    if (
+      isScheduledWeekendWork &&
+      !hasPunch &&
+      (statusLower.includes("leave") || (dayStatus.includes("leave") && !statusLower))
+    ) {
+      return "Absent";
+    }
+
+    if (statusLower.includes("leave")) return "Leave";
+    if (dayStatus.includes("leave") && !statusLower) return "Leave";
+    return rawStatus || "-";
+  };
+
+  const normalizeAttendanceStatus = (status) => {
+    const normalized = String(status || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
+    if (!normalized) return "";
+    if (normalized.includes("present")) return "Present";
+    if (normalized.includes("absent")) return "Absent";
+    if (normalized.includes("weekoff") || normalized.includes("weekendoff")) return "Week Off";
+    if (normalized.includes("holiday")) return "Holiday";
+    return "";
+  };
+
+  const getAttendanceStatusBucket = (record) =>
+    normalizeAttendanceStatus(getDerivedAttendanceStatus(record));
+
+  const attendanceSummary = {
+    total: attendanceRecords.length,
+    present: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Present").length,
+    absent: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Absent").length,
+    weekOff: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Week Off").length,
+    holiday: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Holiday").length,
+  };
+
+  const parseTimeToMinutes = (value) => {
+    const parsed = parseRecordDateTime(value);
+    if (!parsed) return null;
+    return parsed.getHours() * 60 + parsed.getMinutes();
+  };
+
+  const getShiftStartForRecord = (record) => {
+    const employee = record?.employee;
+    if (!employee) return null;
+    const recordDate = parseRecordDate(record?.date);
+    const additionalEntry = recordDate
+      ? getAdditionalWorkingDayEntry(employee, recordDate)
+      : null;
+    if (additionalEntry?.timeIn) return additionalEntry.timeIn;
+    return employee.shiftStartTime || data?.shiftStartTime || null;
+  };
+
+  const getLateArrivalMinutes = (record) => {
+    if (!record?.timeIn) return 0;
+    const expectedMinutes = parseTimeToMinutes(getShiftStartForRecord(record));
+    const clockInMinutes = parseTimeToMinutes(record.timeIn);
+    if (expectedMinutes == null || clockInMinutes == null) return 0;
+    const lateMinutes = clockInMinutes - expectedMinutes;
+    return lateMinutes > 0 ? lateMinutes : 0;
+  };
+
+  const normalizeAttendancePayload = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (payload?.records && Array.isArray(payload.records)) return payload.records;
+    if (payload?.data && Array.isArray(payload.data)) return payload.data;
+    if (payload?.items && Array.isArray(payload.items)) return payload.items;
+    return payload ? [payload] : [];
+  };
+
+  const getSelectedEmployeeDetails = (employeeRef = normalizeEmployeeIdRef(employeeId)) => {
+    const raw = String(employeeRef || "").trim();
+    if (!raw) return null;
+    const lowered = raw.toLowerCase();
+    const fromDirectory =
+      employeeDirectoryIndex.byId.get(raw) ||
+      employeeDirectoryIndex.byEmployeeId.get(raw) ||
+      employeeDirectoryIndex.byCode.get(lowered);
+
+    if (fromDirectory) return fromDirectory;
+    if (!data) return null;
+
+    const dataCandidates = [data.id, data.employeeId, data.employeeCode, data.code]
+      .filter((value) => value != null)
+      .map((value) => String(value).toLowerCase());
+    return dataCandidates.includes(lowered) ? data : null;
+  };
+
+  const enrichAttendanceRecordsWithEmployeeDetails = (items, employeeRef) => {
+    const selectedEmployee = getSelectedEmployeeDetails(employeeRef);
+    return (items || []).map((record) => {
+      const baseEmployee = record?.employee || {};
+      const idCandidates = [
+        record?.employee?.id,
+        record?.employeeId,
+        record?.employee?.employeeId,
+      ]
+        .filter((value) => value != null)
+        .map((value) => String(value));
+      const codeCandidates = [
+        record?.employee?.employeeCode,
+        record?.employee?.code,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+
+      let matched = null;
+      for (const idValue of idCandidates) {
+        matched =
+          employeeDirectoryIndex.byId.get(idValue) ||
+          employeeDirectoryIndex.byEmployeeId.get(idValue);
+        if (matched) break;
+      }
+      if (!matched) {
+        for (const codeValue of codeCandidates) {
+          matched = employeeDirectoryIndex.byCode.get(codeValue);
+          if (matched) break;
+        }
+      }
+
+      return {
+        ...record,
+        employee: matched || selectedEmployee
+          ? { ...baseEmployee, ...(matched || selectedEmployee) }
+          : baseEmployee,
+      };
+    });
+  };
+
+  const sortAttendanceRecords = (items) => {
+    return [...items].sort((left, right) => {
+      const leftDate = parseRecordDate(left?.date);
+      const rightDate = parseRecordDate(right?.date);
+      if (!leftDate && !rightDate) return 0;
+      if (!leftDate) return 1;
+      if (!rightDate) return -1;
+      if (rightDate.getTime() !== leftDate.getTime()) return rightDate - leftDate;
+
+      const leftTime = parseRecordDateTime(left?.timeIn);
+      const rightTime = parseRecordDateTime(right?.timeIn);
+      if (!leftTime && !rightTime) return 0;
+      if (!leftTime) return 1;
+      if (!rightTime) return -1;
+      return rightTime - leftTime;
+    });
+  };
+
+  const appendMissingAttendanceRows = (items, employeeRef, month, year) => {
+    const employee = getSelectedEmployeeDetails(employeeRef);
+    if (!employee) return items;
+
+    const existingByDateKey = new Set(
+      items
+        .map((record) => buildDateKey(record?.date))
+        .filter(Boolean)
+    );
+
+    const syntheticRows = [];
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+    for (
+      let currentDate = new Date(startDate);
+      currentDate <= endDate;
+      currentDate.setDate(currentDate.getDate() + 1)
+    ) {
+      const dateKey = format(currentDate, "yyyy-MM-dd");
+      if (existingByDateKey.has(dateKey)) continue;
+      syntheticRows.push({
+        id: `virtual-${employee?.id || "emp"}-${dateKey}`,
+        date: format(currentDate, "dd/MM/yyyy"),
+        attendanceStatus: "Absent",
+        dayStatus: "",
+        timeIn: null,
+        timeOut: null,
+        missedTimes: 0,
+        location: null,
+        employee,
+        __synthetic: true,
+      });
+    }
+
+    return sortAttendanceRecords([...items, ...syntheticRows]);
+  };
+
+  const filterAttendanceRecordsByMonth = (items, month, year) => {
+    return (items || []).filter((record) => {
+      const recordDate = parseRecordDate(record?.date);
+      if (!recordDate) return false;
+      return recordDate.getMonth() + 1 === month && recordDate.getFullYear() === year;
+    });
+  };
+
+  const getHolidayCounts = (payload) => {
+    const full = Number(payload?.holidayDaysFull || 0);
+    const half = Number(payload?.holidayDaysHalf || 0);
+    const total = Number(payload?.holidayDaysTotal || 0);
+    return {
+      full,
+      half,
+      total,
+      hasAny: full > 0 || half > 0 || total > 0,
+    };
+  };
+
+  const formatHolidaySummary = (payload) => {
+    const { full, half, total, hasAny } = getHolidayCounts(payload);
+    if (!hasAny) return null;
+    const formatDayEquivalent = (value) => {
+      const rounded = Math.round(value * 10) / 10;
+      return Number.isInteger(rounded) ? `${rounded}` : `${rounded.toFixed(1)}`;
+    };
+    const fullLabel = `${full} Full Day${full === 1 ? "" : "s"}`;
+    const halfLabel = `${half} Half Day${half === 1 ? "" : "s"}`;
+    if (full > 0 && half > 0) {
+      const equivalent = formatDayEquivalent(full + half * 0.5);
+      return `Holidays - ${fullLabel} + ${halfLabel} (${equivalent} day equivalent)`;
+    }
+    if (full > 0) {
+      return `Holidays - ${fullLabel}`;
+    }
+    if (half > 0) {
+      const equivalent = formatDayEquivalent(half * 0.5);
+      return `Holidays - ${halfLabel} (${equivalent} day equivalent)`;
+    }
+    if (total > 0) {
+      return `Holidays - ${total}`;
+    }
+    return null;
+  };
+
+  const buildHolidayRowsHtml = (payload) => {
+    const summary = formatHolidaySummary(payload);
+    if (!summary) return "";
+    return `<tr><td>Holiday</td><td>${summary.replace(/^Holiday[s]? - /, "")}</td></tr>`;
+  };
+
+  const parseNumber = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const roundCurrency = (value) => Math.round(parseNumber(value) * 100) / 100;
+  const expectedAttendance = data?.expectedAttendance || {};
+  const actualAttendance = data?.actualAttendance || {};
+  const salaryCalculation = data?.salaryCalculation || {};
+  const backendEstimatedSalary = parseNumber(
+    salaryCalculation.estimatedNetSalary ?? data?.netSalary ?? data?.salary
+  );
+  const perMinuteSalary = parseNumber(
+    salaryCalculation.perMinuteRate ?? data?.perMinuteSalary ?? 0
+  );
+
+  const additionalAllowancesTotal = additionalAllowances.reduce((sum, item) => {
+    return sum + parseNumber(item?.amount);
+  }, 0);
+  const overtimeMinutes = Math.max(
+    0,
+    Math.round(parseNumber(data?.overtimeMinutes ?? parseNumber(data?.overtimeHours) * 60))
+  );
+  const overtimeSalary = roundCurrency(overtimeMinutes * parseNumber(data?.perMinuteSalary));
+  const includedOvertimeSalary = includeOvertime ? overtimeSalary : 0;
+  const payrollBaseSalary = backendEstimatedSalary;
+  const pfBaseSalary = parseNumber(data?.salary);
+  const lopDays = parseNumber(paymentDetails.lop);
+  const perDaySalary =
+    parseNumber(data?.perDaySalary) > 0
+      ? parseNumber(data?.perDaySalary)
+      : parseNumber(data?.scheduledDays) > 0
+      ? pfBaseSalary / parseNumber(data?.scheduledDays)
+      : 0;
+  const lopDeductionAmount = roundCurrency(lopDays * perDaySalary);
+  const resolvedPfAmount =
+    parseNumber(paymentDetails.pfAmount) > 0
+      ? parseNumber(paymentDetails.pfAmount)
+      : parseNumber(paymentDetails.pfPercentage) > 0
+      ? (pfBaseSalary * parseNumber(paymentDetails.pfPercentage)) / 100
+      : 0;
+
+  const casualLeaveTakenCount =
+    parseNumber(data?.paidCasualDays) + parseNumber(data?.unpaidCasualDays);
+  const permissionAllowancePerMonth = parseNumber(
+    data?.permissionAllowancePerMonth || 0
+  );
+  const permissionAllowedMinutes = parseNumber(
+    data?.permissionAllowedMinutes || 0
+  );
+  const permissionTakenCount = parseNumber(data?.permissionTakenCount || 0);
+  const permissionTakenMinutes = parseNumber(
+    actualAttendance.permissionDurationMinutes ?? data?.permissionTakenMinutes ?? 0
+  );
+  const lateDays = parseNumber(actualAttendance.lateAttendanceDays ?? data?.lateDays ?? 0);
+  const totalLateMinutes = parseNumber(
+    actualAttendance.lateAttendanceMinutes ?? data?.totalLateMinutes ?? 0
+  );
+
+  const previewEarnings = [
+    { label: "Estimated Net Salary", amount: backendEstimatedSalary },
+    { label: "Convenience", amount: parseNumber(paymentDetails.convenience) },
+    { label: "OT", amount: includedOvertimeSalary },
+    { label: "Incentives", amount: parseNumber(paymentDetails.incentives) },
+    { label: "Additional Allowances", amount: additionalAllowancesTotal },
+  ].filter((item) => item.amount > 0);
+
+  const previewDeductions = [
+    ...(SHOW_PF_SECTION ? [{ label: "PF", amount: resolvedPfAmount }] : []),
+    { label: "LOP", amount: lopDeductionAmount },
+    { label: "Advance", amount: parseNumber(paymentDetails.advance) },
+    { label: "Others", amount: parseNumber(paymentDetails.others) },
+  ].filter((item) => item.amount > 0);
+
+  const finalNetSalary = parseNumber(
+    netSalary !== null && netSalary !== undefined ? netSalary : backendEstimatedSalary
+  );
+
+  const handlePrint = () => {
+    if (!data) return;
+
+    const printableAdditionalAllowances = additionalAllowances.filter(
+      (item) => (item?.name || "").trim() || parseNumber(item?.amount) > 0
+    );
+    const additionalAllowanceRows = printableAdditionalAllowances
+      .map(
+        (item) => `
+                    <tr>
+                        <td><strong>${item.name || "Allowance"}</strong></td>
+                        <td>${formatINR(item.amount)}</td>
+                    </tr>
+                  `
+      )
+      .join("");
+    const additionalWorkingSummary =
+      additionalWorkingDays.length > 0
+        ? additionalWorkingDays
+            .map(
+              (item) =>
+                `${item.label || formatWeekOffDay(item.dayType)} (${formatShiftWindow(
+                  item.timeIn,
+                  item.timeOut
+                )})`
+            )
+            .join(", ")
+        : "Not configured";
+    const finalPayableForPrint = finalNetSalary;
+
+    const printWindow = window.open("", "_blank");
+    printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Payroll Summary - ${data.firstName} ${
+      data.lastName
+    }</title>
+                <style>
+                    @page {
+                        size: A4;
+                        margin: 10mm;
+                    }
+                    body {
+                        font-family: Arial, sans-serif;
+                        color: #000;
+                        padding: 20px;
+                        
+                    }
+                    .print-header {
+                        text-align: center;
+                        margin-bottom: 20px;
+                        border-bottom: 2px solid #351153;
+                        padding-bottom: 10px;
+                    }
+                    .print-header h1 {
+                        color: #351153;
+                        margin-bottom: 5px;
+                    }
+                    .print-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin-bottom: 20px;
+                    }
+                    .print-table th, .print-table td {
+                        padding: 8px;
+                        border: 1px solid #ddd;
+                        text-align: left;
+                    }
+                    .print-table th {
+                        background-color: #f5f5f5;
+                        font-weight: bold;
+                    }
+                    .print-footer {
+                        display: flex;
+                        justify-content: space-between;
+                        margin-top: 40px;
+                        padding-top: 20px;
+                        border-top: 1px solid #ddd;
+                    }
+                    .signature-box {
+                        width: 200px;
+                        border-top: 1px solid #000;
+                        padding-top: 10px;
+                        text-align: center;
+                    }
+                    .highlight-row {
+                        background-color: #f5f0ff;
+                        font-weight: bold;
+                    }
+                    .salary-details-wrapper {
+                        margin-top: 24px;
+                    }
+                    .salary-section-title {
+                        color: #351153;
+                        font-weight: 600;
+                        font-size: 1.1rem;
+                        margin-bottom: 16px;
+                        border-bottom: 2px solid #351153;
+                        padding-bottom: 8px;
+                    }
+                    .salary-details-table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        background-color: #fff;
+                        border-radius: 8px;
+                        overflow: hidden;
+                        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+                    }
+                    .salary-details-table td {
+                        padding: 14px 18px;
+                        border-bottom: 1px solid #eee;
+                        font-size: 15px;
+                        vertical-align: top;
+                    }
+                    .salary-details-table td:first-child {
+                        font-weight: 600;
+                        color: #333;
+                        width: 40%;
+                        background-color: #f9f9f9;
+                    }
+                    .salary-details-table tr:last-child td {
+                        border-bottom: none;
+                    }
+                    .salary-net-highlight {
+                        background-color: #f5f0ff;
+                        font-weight: 700;
+                        color: #2b1035;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="print-header">
+                    <h1>Payroll Summary</h1>
+                    <p>${data.firstName} ${data.lastName} | ${format(
+      selectedDate,
+      "MMMM yyyy"
+    )}</p>
+                </div>
+                
+                <table class="print-table">
+                    <tr>
+                        <th colspan="2" style="background-color: #351153; color: white;">Employee Details</th>
+                    </tr>
+                    <tr>
+                        <td width="40%"><strong>Full Name</strong></td>
+                        <td>${data.firstName} ${data.lastName}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Employee ID</strong></td>
+                        <td>${employeeId}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Mobile Number</strong></td>
+                        <td>${data.mobile || "N/A"}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Branch</strong></td>
+                        <td>${data.branch || "N/A"}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Position</strong></td>
+                        <td>${data.position || "N/A"}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Email</strong></td>
+                        <td>${data.email || "N/A"}</td>
+                    </tr>
+                </table>
+                
+                <div class="salary-details-wrapper">
+                    <h3 class="salary-section-title">Salary Details</h3>
+                    <table class="salary-details-table">
+                        <tr>
+                            <td>Month/Year</td>
+                            <td>${format(selectedDate, "MMMM yyyy")}</td>
+                        </tr>
+                        <tr>
+                            <td>Total Days</td>
+                            <td>${data.daysInMonth}</td>
+                        </tr>
+                        <tr>
+                            <td>Scheduled Days</td>
+                            <td>${data.scheduledDays ?? "N/A"}</td>
+                        </tr>
+                        <tr>
+                            <td>Week Offs</td>
+                            <td>${data.weekOffDays ?? "0"}</td>
+                        </tr>
+                        <tr>
+                            <td>Week Off Day</td>
+                            <td>${formatWeekOffDay(data.weekOffDay)}</td>
+                        </tr>
+                        <tr>
+                            <td>Regular Shift</td>
+                            <td>${formatShiftWindow(data.shiftStartTime, data.shiftEndTime)} (${data.regularShiftMinutes ?? "0"} mins/day)</td>
+                        </tr>
+                        <tr>
+                            <td>Additional Working Days</td>
+                            <td>${additionalWorkingSummary}</td>
+                        </tr>
+                        ${buildHolidayRowsHtml(data)}
+                        <tr>
+                            <td>Worked Days</td>
+                            <td>${data.workedDays ?? "N/A"}</td>
+                        </tr>
+                        <tr>
+                            <td>Approved Leave Taken</td>
+                            <td>${data.approvedLeaveTakenCount ?? "0"}</td>
+                        </tr>
+                        <tr>
+                            <td>Permission Taken</td>
+                            <td>${data.permissionTakenCount ?? "0"}</td>
+                        </tr>
+                        <tr>
+                            <td>Basic Salary</td>
+                            <td>${formatINR(data.salary)}</td>
+                        </tr>
+                        <tr>
+                            <td>Absent Days</td>
+                            <td>${data.absentDays ?? "0"}</td>
+                        </tr>
+                        <tr>
+                            <td>Monthly Expected Working</td>
+                            <td>${data.expectedHours ?? "0"} hours (${data.expectedWorkingMinutes ?? "0"} mins)</td>
+                        </tr>
+                        <tr>
+                            <td>Employee Present Working</td>
+                            <td>${data.workedHours ?? "0"} hours (${data.presentWorkingMinutes ?? "0"} mins)</td>
+                        </tr>
+                        <tr>
+                            <td>Present Payable Hours</td>
+                            <td>${data.payableHours ?? "0"} hours (${data.payablePresentMinutes ?? "0"} mins)</td>
+                        </tr>
+                        <tr>
+                            <td>Overtime Hours</td>
+                            <td>${data.overtimeHours ?? "0"} hours</td>
+                        </tr>
+                        <tr>
+                            <td>Missing Hours</td>
+                            <td>${data.missingHours ?? "0"} hours</td>
+                        </tr>
+                        <tr>
+                            <td>Payroll Net</td>
+                            <td>${formatINR(finalNetSalary)}</td>
+                        </tr>
+                        ${
+                          netSalary
+                            ? `
+                        <tr class="salary-net-highlight">
+                            <td>Net Salary</td>
+                            <td>${formatINR(netSalary)}</td>
+                        </tr>
+                        `
+                            : ""
+                        }
+                    </table>
+                </div>
+                
+                <table class="print-table">
+                    <tr>
+                        <th colspan="2" style="background-color: #351153; color: white;">Payment Details</th>
+                    </tr>
+                    <tr>
+                        <td width="40%"><strong>Convenience</strong></td>
+                        <td>${formatINR(paymentDetails.convenience)}</td>
+                    </tr>
+                        <tr>
+                            <td><strong>OT</strong></td>
+                            <td>${formatINR(includedOvertimeSalary)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>PF Deduction</strong></td>
+                            <td>${formatINR(resolvedPfAmount)}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>LOP</strong></td>
+                            <td>${formatINR(paymentDetails.lop)}</td>
+                        </tr>
+                    <tr>
+                        <td><strong>Incentives</strong></td>
+                        <td>${formatINR(paymentDetails.incentives)}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Advance</strong></td>
+                        <td>${formatINR(paymentDetails.advance)}</td>
+                    </tr>
+                        <tr>
+                            <td><strong>Others</strong></td>
+                            <td>${paymentDetails.others || "N/A"}</td>
+                        </tr>
+                        ${
+                          additionalAllowanceRows
+                            ? `
+                        <tr>
+                            <td colspan="2" style="font-weight:600;background:#f9f9f9;">Additional Allowances</td>
+                        </tr>
+                        ${additionalAllowanceRows}
+                        `
+                            : ""
+                        }
+                        <tr class="salary-net-highlight">
+                            <td><strong>Final Payable Salary</strong></td>
+                            <td>${formatINR(finalPayableForPrint)}</td>
+                        </tr>
+                    </table>
+                
+                <div class="print-footer">
+                    <div class="signature-box">
+                        Employee Signature
+                    </div>
+                    <div class="signature-box">
+                        Authorized Signature
+                    </div>
+                </div>
+                
+                <script>
+                    setTimeout(function() {
+                        window.print();
+                        window.close();
+                    }, 200);
+                </script>
+            </body>
+            </html>
+        `);
+    printWindow.document.close();
+  };
+  const client = JSON.parse(localStorage.getItem("loggedInClient"));
+
+  useEffect(() => {
+    const clientId = client?.id;
+    if (!clientId) return;
+    const checkLogo = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/payroll/logo?clientId=${encodeURIComponent(clientId)}`
+        );
+        setLogoUploaded(response.ok && response.status !== 204);
+      } catch (err) {
+        setLogoUploaded(false);
+      }
+    };
+    checkLogo();
+  }, [client?.id]);
+
+  useEffect(() => {
+    const clientId = client?.id;
+    if (!clientId) {
+      setHolidayDateSet(new Set());
+      return;
+    }
+
+    const fetchHolidays = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/admin/holidays?clientId=${encodeURIComponent(clientId)}`
+        );
+        if (!response.ok) {
+          setHolidayDateSet(new Set());
+          return;
+        }
+        const payload = await response.json();
+        if (!Array.isArray(payload)) {
+          setHolidayDateSet(new Set());
+          return;
+        }
+
+        const nextSet = new Set();
+        payload.forEach((holiday) => {
+          const parsedDate = parseRecordDate(holiday?.holidayDate);
+          const dateKey = parsedDate ? format(parsedDate, "yyyy-MM-dd") : null;
+          if (dateKey) nextSet.add(dateKey);
+        });
+        setHolidayDateSet(nextSet);
+      } catch (err) {
+        setHolidayDateSet(new Set());
+      }
+    };
+
+    fetchHolidays();
+  }, [client?.id]);
+
+  useEffect(() => {
+    const clientId = client?.id;
+    if (!clientId) {
+      setEmployeeDirectory([]);
+      return;
+    }
+
+    const fetchEmployeeDirectory = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/payroll/employees?clientId=${encodeURIComponent(clientId)}`
+        );
+        if (!response.ok) {
+          setEmployeeDirectory([]);
+          return;
+        }
+        const payload = await response.json();
+        setEmployeeDirectory(Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        setEmployeeDirectory([]);
+      }
+    };
+
+    fetchEmployeeDirectory();
+  }, [client?.id]);
+
+  const handleLogoUpload = async () => {
+    const clientId = client?.id;
+    if (!clientId) {
+      setError("Client session missing. Please login again.");
+      return;
+    }
+    if (!logoFile) {
+      setError("Please choose a logo image before upload.");
+      return;
+    }
+
+    setLogoUploading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("clientId", String(clientId));
+      formData.append("logo", logoFile);
+      const response = await fetch(`${API_BASE_URL}/api/payroll/logo`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const msg = await parseErrorMessage(response, "Failed to upload payroll logo");
+        throw new Error(msg);
+      }
+      setLogoUploaded(true);
+      alert("Payroll logo uploaded successfully.");
+    } catch (err) {
+      setError(err.message || "Failed to upload payroll logo");
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  const handleEmployeeNameSelect = (e) => {
+    setEmployeeId(String(e.target.value || ""));
+    resetPayrollComputation();
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setData(null);
+    setLoading(true);
+
+    const month = getMonth(selectedDate) + 1;
+    const year = getYear(selectedDate);
+    const employeeRef = normalizeEmployeeIdRef(employeeId);
+    const clientId = client?.id;
+
+    if (!employeeRef) {
+      setError("Employee ID or Employee Name selection is required");
+      setLoading(false);
+      return;
+    }
+    if (!clientId) {
+      setError("Client session missing. Please login again.");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/payroll/month-payroll?employeeId=${encodeURIComponent(employeeRef)}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}${selectedBranch ? `&branch=${encodeURIComponent(selectedBranch)}` : ""}`
+      );
+
+      if (!response.ok) {
+        const errorMessage = await parseErrorMessage(
+          response,
+          "Failed to fetch payroll data"
+        );
+        throw new Error(errorMessage);
+      }
+
+      const result = await response.json();
+      const payrollDays = Array.isArray(result?.additionalWorkingDays)
+        ? result.additionalWorkingDays
+        : [];
+
+      if (payrollDays.length === 0) {
+        try {
+          const employeeResponse = await fetch(
+            `${API_BASE_URL}/api/employees/${encodeURIComponent(employeeRef)}?clientId=${encodeURIComponent(clientId)}`
+          );
+          if (employeeResponse.ok) {
+            const employeeData = await employeeResponse.json();
+            let employeeDays = Array.isArray(employeeData?.additionalWorkingDays)
+              ? employeeData.additionalWorkingDays
+              : [];
+
+            if (employeeDays.length === 0) {
+              const daysResponse = await fetch(
+                `${API_BASE_URL}/api/employees/${encodeURIComponent(employeeRef)}/additional-working-days?clientId=${encodeURIComponent(clientId)}`
+              );
+              if (daysResponse.ok) {
+                const daysPayload = await daysResponse.json();
+                employeeDays = Array.isArray(daysPayload) ? daysPayload : [];
+              }
+            }
+
+            setData({
+              ...result,
+              profileImage: result?.profileImage || employeeData?.profileImage || null,
+              leavePolicyType: result?.leavePolicyType || employeeData?.leavePolicyType || null,
+              additionalWorkingDays: employeeDays,
+            });
+          } else {
+            setData(result);
+          }
+        } catch (_fallbackError) {
+          setData(result);
+        }
+      } else {
+        setData(result);
+      }
+    } catch (err) {
+      setError(err.message || "Request failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePaymentDetailChange = (e) => {
+    const { name, value } = e.target;
+    let roundedValue = value;
+    if (value !== "" && value !== null && value !== undefined) {
+      if (name === "pfPercentage") {
+        roundedValue = Math.min(100, Math.max(0, Math.round(parseNumber(value))));
+      } else if (name === "lop") {
+        roundedValue = Math.max(0, Math.round(parseNumber(value)));
+      } else {
+        roundedValue = roundCurrency(parseNumber(value));
+      }
+    }
+    setPaymentDetails((prev) => ({
+      ...prev,
+      [name]: roundedValue,
+    }));
+  };
+
+  const fetchAttendanceForMonth = async () => {
+    setAttendanceError(null);
+    setAttendanceRecords([]);
+
+    const month = getMonth(selectedDate) + 1;
+    const year = getYear(selectedDate);
+    const employeeRef = normalizeEmployeeIdRef(employeeId);
+    const clientId = client?.id;
+
+    if (!employeeRef) {
+      setAttendanceError("Employee ID or Employee Name selection is required");
+      return;
+    }
+    if (!clientId) {
+      setAttendanceError("Client session missing. Please login again.");
+      return;
+    }
+
+    setAttendanceLoading(true);
+    try {
+      const primaryUrl =
+        `${API_BASE_URL}/api/attendance-records/by-employee-month?employeeId=${encodeURIComponent(
+          employeeRef
+        )}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}`;
+      const fallbackUrl =
+        `${API_BASE_URL}/api/attendance-records/by-employee?employeeId=${encodeURIComponent(
+          employeeRef
+        )}&limit=200&clientId=${encodeURIComponent(clientId)}`;
+
+      let response = await fetch(primaryUrl);
+      if (!response.ok && response.status !== 400 && response.status !== 404) {
+        const fallbackResponse = await fetch(fallbackUrl);
+        if (fallbackResponse.ok || fallbackResponse.status === 400 || fallbackResponse.status === 404) {
+          response = fallbackResponse;
+        }
+      }
+
+      if (response.status === 400 || response.status === 404) {
+        setAttendanceRecords([]);
+        return;
+      }
+
+      if (!response.ok) {
+        const message = await parseErrorMessage(response, "Failed to fetch attendance records");
+        throw new Error(message);
+      }
+      const result = await response.json();
+      const normalizedRecords = normalizeAttendancePayload(result).filter((item) => item != null);
+      const monthRecords = filterAttendanceRecordsByMonth(normalizedRecords, month, year);
+      const enrichedRecords = enrichAttendanceRecordsWithEmployeeDetails(monthRecords, employeeRef);
+      const recordsWithMissingDays = appendMissingAttendanceRows(
+        enrichedRecords,
+        employeeRef,
+        month,
+        year
+      );
+      setAttendanceRecords(sortAttendanceRecords(recordsWithMissingDays));
+    } catch (err) {
+      setAttendanceError(err.message || "Failed to fetch attendance records");
+    } finally {
+      setAttendanceLoading(false);
+    }
+  };
+
+  const handleAllowanceChange = (index, field, value) => {
+    const normalizedValue =
+      field === "amount"
+        ? value === "" || value === null || value === undefined
+          ? ""
+          : roundCurrency(Math.max(0, parseNumber(value)))
+        : value;
+    setAdditionalAllowances((prev) =>
+      prev.map((item, idx) =>
+        idx === index ? { ...item, [field]: normalizedValue } : item
+      )
+    );
+  };
+
+  const addAllowance = () => {
+    setAdditionalAllowances((prev) => [...prev, { name: "", amount: 0 }]);
+  };
+
+  const removeAllowance = (index) => {
+    setAdditionalAllowances((prev) =>
+      prev.length > 1 ? prev.filter((_, idx) => idx !== index) : prev
+    );
+  };
+
+  const calculateNetSalary = async () => {
+    if (!data) return;
+    const employeeRef = normalizeEmployeeIdRef(employeeId);
+    const clientId = client?.id;
+    if (!clientId) {
+      setError("Client session missing. Please login again.");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/salary-details/calculate?clientId=${encodeURIComponent(clientId)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            employeeId: employeeRef,
+            position: data.position || "",
+            branch: data.branch || "",
+            salary: payrollBaseSalary || 0,
+            convienceAmount: paymentDetails.convenience || 0,
+            incentive: paymentDetails.incentives || 0,
+            overTime: includedOvertimeSalary || 0,
+            lossOfPay: lopDeductionAmount || 0,
+            advance: paymentDetails.advance || 0,
+            others: paymentDetails.others || 0,
+            pfAmount: resolvedPfAmount || 0,
+            pfPercentage: paymentDetails.pfPercentage || 0,
+            additionalAllowancesJson: JSON.stringify(additionalAllowances),
+            additionalAllowancesTotal: additionalAllowancesTotal || 0,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to calculate salary");
+      }
+
+      const result = await response.json();
+      setNetSalary(result.netSalary);
+      setOpenSnackbar(true);
+    } catch (err) {
+      setError(err.message || "Failed to calculate salary");
+    }
+  };
+
+  const handleCloseSnackbar = () => {
+    setOpenSnackbar(false);
+  };
+
+  const handleGeneratePayslip = () => {
+    if (!data) return;
+    if (netSalary === null) {
+      setError("Please click Review & Calculate before generating payslip.");
+      return;
+    }
+    if (!data.email) {
+      setError("Employee email is missing.");
+      return;
+    }
+    setPayslipPreviewOpen(true);
+  };
+
+  const sendConfirmationEmail = async () => {
+    if (!data) return;
+    const clientId = client?.id;
+    if (!clientId) {
+      setError("Client session missing. Please login again.");
+      return;
+    }
+    if (!data.email) {
+      setError("Employee email is missing.");
+      return;
+    }
+
+    setSendingEmail(true);
+    setError(null);
+
+    try {
+      const filteredAllowances = additionalAllowances
+        .filter((item) => (item?.name || "").trim() || parseNumber(item?.amount) > 0)
+        .map((item) => ({
+          name: (item?.name || "").trim() || "Allowance",
+          amount: parseNumber(item?.amount),
+        }));
+
+      const emailPayload = {
+        clientId,
+        employeeId: Number(normalizeEmployeeIdRef(employeeId) || data.employeeId || 0),
+        companyName: client?.companyName || client?.companyCode || "ZenTime",
+        sender: "b.inba.ips444@gmail.com",
+        receiver: data.email,
+        subject: `Payslip - ${format(selectedDate, "MMMM yyyy")}`,
+        message: `Dear ${data.firstName || ""},\n\nPlease find your payslip attached.\n\nRegards,\nPayroll Team`,
+        employeeName: `${data.firstName || ""} ${data.lastName || ""}`.trim(),
+        position: data.position || "",
+        branch: data.branch || "",
+        mobile: data.mobile || "",
+        email: data.email || "",
+        month: getMonth(selectedDate) + 1,
+        year: getYear(selectedDate),
+        totalDays: Number(data.daysInMonth || 0),
+        scheduledDays: Number(data.scheduledDays || 0),
+        weekOffDays: Number(data.weekOffDays || 0),
+        holidaysSummary: formatHolidaySummary(data) || "-",
+        workedDays: Number(data.workedDays || 0),
+        absentDays: Number(data.absentDays || 0),
+        expectedHours: Number(data.expectedHours || 0),
+        payableHours: Number(data.payableHours || 0),
+        overtimeHours: Number(data.overtimeHours || 0),
+        missingHours: Number(data.missingHours || 0),
+        basicSalary: Number(data.salary || 0),
+        netSalary: Number(finalNetSalary || 0),
+        convenience: parseNumber(paymentDetails.convenience),
+        otAmount: includedOvertimeSalary,
+        pfAmount: Number(resolvedPfAmount || 0),
+        lopAmount: Number(lopDeductionAmount || 0),
+        incentives: parseNumber(paymentDetails.incentives),
+        advance: parseNumber(paymentDetails.advance),
+        others: parseNumber(paymentDetails.others),
+        allowancesTotal: Number(additionalAllowancesTotal || 0),
+        additionalAllowances: filteredAllowances,
+      };
+
+      const response = await fetch(`${API_BASE_URL}/api/payroll/send-payslip`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(emailPayload),
+      });
+
+      if (!response.ok) {
+        const errorMessage = await parseErrorMessage(
+          response,
+          "Failed to generate and send payslip"
+        );
+        throw new Error(errorMessage);
+      }
+
+      setEmailSent(true);
+      alert(`Payslip PDF sent to ${data.email}`);
+      setPayslipPreviewOpen(false);
+    } catch (err) {
+      setError(err.message || "Failed to send payslip");
+      console.error("Payslip email error:", err);
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+ 
+
+  // Styles
+  const styles = {
+    page: {
+      minHeight: "100vh",
+      background:
+        "radial-gradient(900px 620px at 8% 10%, rgba(123,74,184,0.14), transparent 60%), radial-gradient(880px 620px at 90% 0%, rgba(170,130,225,0.16), transparent 65%), linear-gradient(180deg, #f7f3fc 0%, #f1ebf9 42%, #ede6f6 100%)",
+      color: "#2a1e3f",
+      pb: 6,
+    },
+    hero: {
+      background:
+        "linear-gradient(135deg, #351153 0%, #4f2677 48%, #65388f 100%)",
+      color: "#ffffff",
+      borderRadius: 4,
+      padding: { xs: "24px", md: "32px" },
+      boxShadow: "0 18px 42px rgba(53,17,83,0.28)",
+      position: "relative",
+      overflow: "hidden",
+      border: "1px solid rgba(255,255,255,0.22)",
+    },
+    heroGlow: {
+      position: "absolute",
+      inset: 0,
+      background:
+        "radial-gradient(420px 240px at 20% 20%, rgba(255,255,255,0.24), transparent 60%), radial-gradient(420px 240px at 85% 10%, rgba(214,186,255,0.22), transparent 60%)",
+      pointerEvents: "none",
+    },
+    heroTitle: {
+      fontFamily: '"Fraunces", serif',
+      fontSize: { xs: "2rem", md: "2.4rem" },
+      fontWeight: 600,
+      letterSpacing: "0.3px",
+    },
+    heroSub: {
+      color: "rgba(255,255,255,0.84)",
+      fontSize: "0.95rem",
+      maxWidth: 520,
+    },
+    actionRow: {
+      display: "flex",
+      gap: 1.2,
+      alignItems: "center",
+      mt: 2,
+      flexWrap: "wrap",
+    },
+    chip: {
+      backgroundColor: "rgba(255,255,255,0.2)",
+      border: "1px solid rgba(255,255,255,0.35)",
+      color: "#ffffff",
+      px: 1.5,
+      py: 0.6,
+      borderRadius: 999,
+      fontSize: "0.8rem",
+    },
+    panel: {
+      backgroundColor: "#ffffff",
+      borderRadius: 3,
+      border: "1px solid rgba(53,17,83,0.1)",
+      boxShadow: "0 12px 30px rgba(53,17,83,0.12)",
+    },
+    sectionTitle: {
+      fontFamily: '"Manrope", sans-serif',
+      fontWeight: 700,
+      color: "#351153",
+      marginBottom: "12px",
+      letterSpacing: "0.5px",
+      fontSize: "0.9rem",
+      textTransform: "uppercase",
+    },
+    primaryButton: {
+      background: "linear-gradient(135deg, #351153 0%, #5a2d8a 100%)",
+      color: "#ffffff",
+      "&:hover": {
+        background: "linear-gradient(135deg, #2d0f47 0%, #4c2575 100%)",
+      },
+      textTransform: "none",
+      fontWeight: 700,
+      boxShadow: "0 12px 26px rgba(53,17,83,0.3)",
+    },
+    secondaryButton: {
+      backgroundColor: "#ffffff",
+      color: "#351153",
+      border: "1px solid rgba(53,17,83,0.3)",
+      "&:hover": {
+        backgroundColor: "#f3ecfb",
+        border: "1px solid rgba(53,17,83,0.55)",
+      },
+      textTransform: "none",
+      fontWeight: 600,
+    },
+    confirmButton: {
+      backgroundColor: "#6a1b9a",
+      color: "#ffffff",
+      "&:hover": {
+        backgroundColor: "#571785",
+      },
+      "&:disabled": {
+        backgroundColor: "#cdbbe2",
+        color: "#ffffff",
+      },
+      textTransform: "none",
+      fontWeight: 700,
+      boxShadow: "0 10px 24px rgba(106,27,154,0.28)",
+    },
+    inputField: {
+      "& .MuiOutlinedInput-root": {
+        backgroundColor: "#ffffff",
+        borderRadius: 2,
+        "& fieldset": {
+          borderColor: "rgba(53,17,83,0.2)",
+        },
+        "&:hover fieldset": {
+          borderColor: "rgba(53,17,83,0.45)",
+        },
+        "&.Mui-focused fieldset": {
+          borderColor: "#351153",
+        },
+      },
+      "& .MuiInputBase-input": {
+        color: "#2a1e3f",
+      },
+      "& label": {
+        color: "rgba(53,17,83,0.75)",
+      },
+    },
+    statCard: {
+      padding: "18px 20px",
+      borderRadius: 2.5,
+      background:
+        "linear-gradient(140deg, #ffffff 0%, #f8f4ff 100%)",
+      border: "1px solid rgba(53,17,83,0.12)",
+      boxShadow: "0 10px 24px rgba(53,17,83,0.11)",
+    },
+    statLabel: {
+      fontSize: "0.8rem",
+      textTransform: "uppercase",
+      letterSpacing: "0.6px",
+      color: "rgba(53,17,83,0.72)",
+      fontWeight: 700,
+    },
+    statValue: {
+      fontSize: "1.35rem",
+      fontWeight: 700,
+      color: "#351153",
+      marginTop: "6px",
+    },
+    salaryDetailsWrapper: {
+      marginTop: "8px",
+    },
+    salaryDetailsTable: {
+      width: "100%",
+      borderCollapse: "separate",
+      borderSpacing: "0 10px",
+      "& td": {
+        padding: "12px 16px",
+        fontSize: "14px",
+        verticalAlign: "top",
+      },
+      "& tr": {
+        backgroundColor: "#ffffff",
+        boxShadow: "0 8px 20px rgba(53,17,83,0.08)",
+      },
+      "& td:first-child": {
+        fontWeight: 600,
+        color: "rgba(53,17,83,0.78)",
+        width: "48%",
+      },
+      "& tr td:first-of-type": {
+        borderTopLeftRadius: "12px",
+        borderBottomLeftRadius: "12px",
+      },
+      "& tr td:last-of-type": {
+        borderTopRightRadius: "12px",
+        borderBottomRightRadius: "12px",
+        textAlign: "right",
+        fontWeight: 600,
+        color: "#351153",
+      },
+    },
+    salaryNetHighlight: {
+      background:
+        "linear-gradient(135deg, rgba(106,27,154,0.12) 0%, rgba(53,17,83,0.08) 100%)",
+      color: "#351153",
+    },
+    tableHeaderRow: {
+      backgroundColor: "#f4eefe",
+    },
+    darkTable: {
+      "& td, & th": {
+        color: "rgba(53,17,83,0.84)",
+        borderBottom: "1px solid rgba(53,17,83,0.08)",
+      },
+    },
+  };
+
+  const summaryRowSx = {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
+    columnGap: 2,
+    alignItems: "center",
+  };
+  const summaryLabelSx = {
+    pr: 1,
+    overflowWrap: "anywhere",
+  };
+  const summaryValueSx = {
+    minWidth: { xs: "110px", sm: "140px" },
+    textAlign: "right",
+    whiteSpace: "nowrap",
+    fontWeight: 600,
+  };
+
+  return (
+    <LocalizationProvider dateAdapter={AdapterDateFns}>
+      <Box sx={styles.page}>
+        <Box component="style">{`
+          @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600&family=Manrope:wght@400;600;700&display=swap');
+          body { font-family: 'Manrope', sans-serif; }
+        `}</Box>
+        <Container maxWidth="xl" sx={{ pt: 4, px: { xs: 2, md: 4 } }}>
+          <Box sx={styles.hero}>
+            <Box sx={styles.heroGlow} />
+            <Box sx={{ position: "relative" }}>
+              <Typography sx={styles.heroTitle}>Payroll Dashboard</Typography>
+              <Typography sx={styles.heroSub}>
+                Manage payroll, attendance, and salary insights for each employee.
+              </Typography>
+              <Box sx={styles.actionRow}>
+                <Box sx={styles.chip}>
+                  {format(selectedDate, "MMMM yyyy")}
+                </Box>
+                {data && (
+                  <Box sx={styles.chip}>
+                    Employee #{employeeId || data.employeeId}
+                  </Box>
+                )}
+                {data && (
+                  <Tooltip title="Print Payroll Summary">
+                    <IconButton onClick={handlePrint} sx={{ color: "#ffffff" }}>
+                      <PrintIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+            </Box>
+          </Box>
+
+          <Box sx={{ mt: 4 }}>
+            {/* Form Section */}
+            <Paper sx={{ ...styles.panel, p: { xs: 2.5, md: 3 }, mb: 4 }}>
+              <Box component="form" onSubmit={handleSubmit}>
+                <Grid container spacing={3} alignItems="center">
+                  <Grid item xs={12} md={2}>
+                    <TextField
+                      fullWidth
+                      label="Employee ID"
+                      value={employeeId}
+                      onChange={(e) => {
+                        setEmployeeId(e.target.value);
+                        resetPayrollComputation();
+                      }}
+                      required
+                      variant="outlined"
+                      size={isMobile ? "small" : "medium"}
+                      sx={styles.inputField}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <FormControl fullWidth size={isMobile ? "small" : "medium"} sx={styles.inputField}>
+                      <InputLabel shrink>Branch</InputLabel>
+                      <Select
+                        value={selectedBranch}
+                        onChange={(e) => {
+                          setSelectedBranch(e.target.value);
+                          setEmployeeId("");
+                          resetPayrollComputation();
+                        }}
+                        label="Branch"
+                        displayEmpty
+                        notched
+                        renderValue={(selected) => selected || "All Branches"}
+                      >
+                        <MenuItem value="">All Branches</MenuItem>
+                        {branchOptions.map((branch) => (
+                          <MenuItem key={branch} value={branch}>
+                            {branch}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <FormControl fullWidth size={isMobile ? "small" : "medium"} sx={styles.inputField}>
+                      <InputLabel shrink>Employee Name</InputLabel>
+                      <Select
+                        value={selectedEmployeeNameValue}
+                        onChange={handleEmployeeNameSelect}
+                        label="Employee Name"
+                        displayEmpty
+                        notched
+                        renderValue={(selected) => {
+                          if (!selected) {
+                            return (
+                              <Typography color="text.secondary" noWrap>
+                                Select Employee Name
+                              </Typography>
+                            );
+                          }
+                          const match = employeeNameOptions.find(
+                            (option) => option.value === selected
+                          );
+                          return (
+                            <Typography noWrap title={match?.label || String(selected)}>
+                              {match?.label || String(selected)}
+                            </Typography>
+                          );
+                        }}
+                        sx={{
+                          minWidth: 0,
+                          "& .MuiSelect-select": {
+                            display: "flex",
+                            alignItems: "center",
+                            minHeight: "1.4375em",
+                            overflow: "hidden",
+                            pr: 4,
+                          },
+                        }}
+                      >
+                        <MenuItem value="">Select Employee Name</MenuItem>
+                        {employeeNameOptions.map((option) => (
+                          <MenuItem
+                            key={option.value}
+                            value={option.value}
+                            sx={{ whiteSpace: "normal" }}
+                          >
+                            {option.label}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <DatePicker
+                      views={["year", "month"]}
+                      label="Select Month & Year"
+                      minDate={new Date(2000, 0)}
+                      maxDate={new Date(2100, 11)}
+                      value={selectedDate}
+                      onChange={(newValue) => {
+                        setSelectedDate(newValue);
+                        resetPayrollComputation();
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          fullWidth
+                          required
+                          size={isMobile ? "small" : "medium"}
+                          sx={styles.inputField}
+                        />
+                      )}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      sx={styles.primaryButton}
+                      size={isMobile ? "small" : "medium"}
+                      fullWidth
+                      disabled={loading}
+                    >
+                      {loading ? "Loading..." : "View Payroll"}
+                    </Button>
+                  </Grid>
+                  <Grid item xs={12} md={2}>
+                    <Button
+                      variant="contained"
+                      sx={styles.secondaryButton}
+                      size={isMobile ? "small" : "medium"}
+                      fullWidth
+                      onClick={fetchAttendanceForMonth}
+                      disabled={attendanceLoading}
+                    >
+                      {attendanceLoading ? "Loading..." : "View Attendance"}
+                    </Button>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Box
+                      sx={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 1.5,
+                        alignItems: "center",
+                        pt: 1,
+                        borderTop: "1px solid rgba(53,17,83,0.12)",
+                      }}
+                    >
+                      <Typography sx={{ color: "#351153", fontWeight: 600 }}>
+                        Payslip Logo
+                      </Typography>
+                      <Button variant="outlined" component="label" sx={styles.secondaryButton}>
+                        {logoFile ? logoFile.name : "Choose Logo"}
+                        <input
+                          type="file"
+                          hidden
+                          accept="image/*"
+                          onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                        />
+                      </Button>
+                      <Button
+                        variant="contained"
+                        sx={styles.primaryButton}
+                        onClick={handleLogoUpload}
+                        disabled={logoUploading || !logoFile}
+                      >
+                        {logoUploading ? "Uploading..." : "Upload Logo"}
+                      </Button>
+                      <Typography sx={{ color: logoUploaded ? "#2e7d32" : "#6b5a7a" }}>
+                        {logoUploaded ? "Logo saved for all payslips" : "No logo uploaded yet"}
+                      </Typography>
+                    </Box>
+                  </Grid>
+                </Grid>
+              </Box>
+            </Paper>
+
+            {loading && <LinearProgress sx={{ mb: 4 }} />}
+
+            {error && (
+              <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+                {error}
+              </Alert>
+            )}
+
+            {/* Data Display Section */}
+            {data && (
+              <Box>
+                <Grid container spacing={3} sx={{ mb: 3 }}>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Paper sx={styles.statCard}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
+                          <AttachMoneyIcon sx={{ color: "#351153" }} />
+                        </Box>
+                        <Box>
+                          <Typography sx={styles.statLabel}>Net Salary</Typography>
+                          <Typography sx={styles.statValue}>
+                            {formatINR(finalNetSalary)}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Paper sx={styles.statCard}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
+                          <AccessTimeIcon sx={{ color: "#351153" }} />
+                        </Box>
+                        <Box>
+                          <Typography sx={styles.statLabel}>Present Payable</Typography>
+                          <Typography sx={styles.statValue}>
+                            {formatHoursAndMinutes(data.payableHours)} ({data.payablePresentMinutes ?? 0} mins)
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Paper sx={styles.statCard}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
+                          <AccessTimeIcon sx={{ color: "#351153" }} />
+                        </Box>
+                        <Box>
+                          <Typography sx={styles.statLabel}>Overtime</Typography>
+                          <Typography sx={styles.statValue}>
+                            {formatHoursAndMinutes(data.overtimeHours)}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={12} sm={6} md={3}>
+                    <Paper sx={styles.statCard}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
+                          <AccessTimeIcon sx={{ color: "#351153" }} />
+                        </Box>
+                        <Box>
+                          <Typography sx={styles.statLabel}>Monthly Expected Work</Typography>
+                          <Typography sx={styles.statValue}>
+                            {data.expectedHours ?? 0} hrs ({data.expectedWorkingMinutes ?? 0} mins)
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                </Grid>
+
+                <Grid container spacing={4}>
+                  <Grid item xs={12} md={5}>
+                    <Typography variant="subtitle1" sx={styles.sectionTitle}>
+                      Employee Details
+                    </Typography>
+                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
+                      <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
+                        <Avatar
+                          src={resolveProfileImageUrl(data.profileImage)}
+                          sx={{ width: 64, height: 64, bgcolor: "#ece1fb", color: "#351153" }}
+                        >
+                          {data.firstName?.[0] || "E"}
+                        </Avatar>
+                        <Box>
+                          <Typography sx={{ fontWeight: 700, fontSize: "1.1rem" }}>
+                            {data.firstName} {data.lastName}
+                          </Typography>
+                          <Typography sx={{ color: "#6b5a7a" }}>
+                            Employee #{employeeId}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Box sx={{ mt: 2, display: "grid", gap: 1 }}>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <PhoneIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
+                          <Typography sx={{ color: "#4a3b61" }}>{data.mobile || "N/A"}</Typography>
+                        </Box>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <BusinessIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
+                          <Typography sx={{ color: "#4a3b61" }}>{data.branch || "N/A"}</Typography>
+                        </Box>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <WorkIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
+                          <Typography sx={{ color: "#4a3b61" }}>{data.position || "N/A"}</Typography>
+                        </Box>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <EmailIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
+                          <Typography sx={{ color: "#4a3b61" }}>{data.email || "N/A"}</Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+
+                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
+                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
+                        <Typography sx={{ fontWeight: 700 }}>Expected Attendance</Typography>
+                        <Typography sx={{ color: "#6b5a7a" }}>{format(selectedDate, "MMMM yyyy")}</Typography>
+                      </Box>
+                      <Box sx={{ display: "grid", gap: 1.15 }}>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Total Calendar Days</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {expectedAttendance.totalCalendarDays ?? data.daysInMonth ?? 0}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Configured Week Offs</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {(expectedAttendance.configuredWeekOffs ?? data.weekOffDays ?? 0)} ({formatWeekOffDay(data.weekOffDay)})
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Public Holidays</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {expectedAttendance.publicHolidays ?? (formatHolidaySummary(data)?.replace("Holidays - ", "") || "0")}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>CL Entitlement</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {expectedAttendance.clEntitlement ?? data.casualLeaveBalance ?? 0}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Scheduled Working Days</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {expectedAttendance.scheduledWorkingDays ?? data.scheduledDays ?? 0}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Permission Allowed</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {permissionAllowancePerMonth} ({formatMinutesAsHoursAndMinutes(permissionAllowedMinutes)})
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Regular Shift</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {formatShiftWindow(data.shiftStartTime, data.shiftEndTime)} ({data.regularShiftMinutes ?? 0} mins/day)
+                          </Typography>
+                        </Box>
+                        {additionalWorkingDays.length > 0 ? (
+                          additionalWorkingDays.map((day, index) => (
+                            <Box key={`${day.dayType || "additional"}-${index}`} sx={summaryRowSx}>
+                              <Typography sx={summaryLabelSx}>
+                                {day.label || formatWeekOffDay(day.dayType)}
+                              </Typography>
+                              <Typography sx={summaryValueSx}>
+                                {formatShiftWindow(day.timeIn, day.timeOut)}
+                              </Typography>
+                            </Box>
+                          ))
+                        ) : (
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Additional Working Days</Typography>
+                            <Typography sx={summaryValueSx}>Not configured</Typography>
+                          </Box>
+                        )}
+                      </Box>
+                    </Paper>
+
+                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
+                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
+                        <Typography sx={{ fontWeight: 700 }}>Actual Attendance</Typography>
+                        <Typography sx={{ color: "#6b5a7a" }}>Month Summary</Typography>
+                      </Box>
+                      <Box sx={{ display: "grid", gap: 1.15 }}>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Present Working Days</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {actualAttendance.presentWorkingDays ?? data.workedDays ?? 0}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Week Off Days</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {(actualAttendance.weekOffDays ?? data.weekOffDays ?? 0)} ({formatWeekOffDay(data.weekOffDay)})
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Late Attendance</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {lateDays} day{lateDays === 1 ? "" : "s"} ({formatMinutesAsHoursAndMinutes(totalLateMinutes)})
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>CL Utilized</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {actualAttendance.clUtilized ?? casualLeaveTakenCount ?? 0}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Permission Duration</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {permissionTakenCount} ({formatMinutesAsHoursAndMinutes(permissionTakenMinutes)})
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Public Holidays</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {actualAttendance.publicHolidays ?? (formatHolidaySummary(data)?.replace("Holidays - ", "") || "0")}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+
+                    <Paper sx={{ ...styles.panel, p: 3 }}>
+                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
+                        <Typography sx={{ fontWeight: 700 }}>Salary Calculation</Typography>
+                        <Typography sx={{ color: "#6b5a7a" }}>Monthly Formula</Typography>
+                      </Box>
+                      <Box sx={{ display: "grid", gap: 1.15 }}>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Basic Salary</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {formatINR(salaryCalculation.basicSalary ?? data.salary)}
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Scheduled Working Minutes</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {salaryCalculation.scheduledWorkingMinutes ?? data.expectedWorkingMinutes ?? 0} mins
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Payable Working Minutes</Typography>
+                          <Typography sx={summaryValueSx}>
+                            {salaryCalculation.payableWorkingMinutes ?? data.payableWorkingMinutes ?? data.payablePresentMinutes ?? 0} mins
+                          </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Per Minute Rate</Typography>
+                          <Typography sx={summaryValueSx}>{formatINR(perMinuteSalary)}</Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={{ ...summaryLabelSx, fontWeight: 700 }}>Estimated Net Salary</Typography>
+                          <Typography sx={{ ...summaryValueSx, fontWeight: 700 }}>{formatINR(finalNetSalary)}</Typography>
+                        </Box>
+                      </Box>
+                    </Paper>
+                  </Grid>
+
+                  <Grid item xs={12} md={7}>
+                    <Typography variant="subtitle1" sx={styles.sectionTitle}>
+                      Payment Details
+                    </Typography>
+                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
+                      <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Earnings</Typography>
+                      <Box sx={{ display: "grid", gap: 1.2, mb: 2.5 }}>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>Convenience</Typography>
+                          <TextField fullWidth name="convenience" value={paymentDetails.convenience} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
+                        </Box>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>OT</Typography>
+                          <TextField fullWidth value={overtimeSalary} variant="outlined" size="small" type="number" inputProps={{ readOnly: true }} sx={styles.inputField} />
+                        </Box>
+                        <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
+                          Approved OT: {overtimeMinutes} mins x {formatINR(data?.perMinuteSalary || 0)} = {formatINR(overtimeSalary)}
+                        </Typography>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <Typography>Include this OT?</Typography>
+                          <RadioGroup row value={includeOvertime ? "yes" : "no"} onChange={(event) => {
+                            setIncludeOvertime(event.target.value === "yes");
+                            setNetSalary(null);
+                          }}>
+                            <FormControlLabel value="yes" control={<Radio size="small" />} label="Yes" />
+                            <FormControlLabel value="no" control={<Radio size="small" />} label="No" />
+                          </RadioGroup>
+                        </Box>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>Incentives</Typography>
+                          <TextField fullWidth name="incentives" value={paymentDetails.incentives} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
+                        </Box>
+                      </Box>
+                      <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Deductions</Typography>
+                      <Box sx={{ display: "grid", gap: 1.2 }}>
+                        {SHOW_PF_SECTION && (
+                          <>
+                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                              <Typography>PF Amount</Typography>
+                              <TextField fullWidth name="pfAmount" value={paymentDetails.pfAmount} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
+                            </Box>
+                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                              <Typography>PF %</Typography>
+                              <TextField fullWidth name="pfPercentage" value={paymentDetails.pfPercentage} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, max: 100, step: 1 }} sx={styles.inputField} />
+                            </Box>
+                            <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
+                              Calculated PF Amount (on Basic Salary {formatINR(pfBaseSalary)}): {formatINR(resolvedPfAmount)}
+                            </Typography>
+                          </>
+                        )}
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>LOP (Days)</Typography>
+                          <TextField fullWidth name="lop" value={paymentDetails.lop} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: 1 }} sx={styles.inputField} />
+                        </Box>
+                        <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
+                          LOP Deduction: {formatINR(lopDeductionAmount)} ({lopDays} day{lopDays === 1 ? "" : "s"} x {formatINR(perDaySalary)})
+                        </Typography>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>Advance</Typography>
+                          <TextField fullWidth name="advance" value={paymentDetails.advance} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
+                        </Box>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>Others</Typography>
+                          <TextField fullWidth name="others" value={paymentDetails.others} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
+                        </Box>
+                      </Box>
+                    </Paper>
+
+                    <Paper sx={{ ...styles.panel, p: 3 }}>
+                      <Typography sx={{ fontWeight: 700, mb: 1 }}>Additional Allowance</Typography>
+                      <Box sx={{ display: "grid", gap: 1 }}>
+                        {additionalAllowances.map((item, index) => (
+                          <Box key={`allowance-${index}`} sx={{ display: "grid", gridTemplateColumns: "1fr 140px auto", gap: 1, alignItems: "center" }}>
+                            <TextField
+                              fullWidth
+                              placeholder="Allowance Name"
+                              value={item.name}
+                              onChange={(e) => handleAllowanceChange(index, "name", e.target.value)}
+                              variant="outlined"
+                              size="small"
+                              sx={styles.inputField}
+                            />
+                            <TextField
+                              fullWidth
+                              placeholder="Amount"
+                              value={item.amount}
+                              onChange={(e) => handleAllowanceChange(index, "amount", e.target.value)}
+                              onWheel={(e) => e.target.blur()}
+                              variant="outlined"
+                              size="small"
+                              type="number"
+                              inputProps={{ min: 0, step: "0.01" }}
+                              sx={styles.inputField}
+                            />
+                            <Button
+                              variant="outlined"
+                              color="inherit"
+                              onClick={() => removeAllowance(index)}
+                              disabled={additionalAllowances.length === 1}
+                            >
+                              Remove
+                            </Button>
+                          </Box>
+                        ))}
+                        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <Button variant="outlined" onClick={addAllowance}>
+                            + Add Allowance
+                          </Button>
+                          <Typography sx={{ fontWeight: 600 }}>
+                            Total: {formatINR(additionalAllowancesTotal)}
+                          </Typography>
+                        </Box>
+                        <Box
+                          sx={{
+                            mt: 1,
+                            p: 2,
+                            borderRadius: 2,
+                            border: "1px solid rgba(53,17,83,0.16)",
+                            background:
+                              "linear-gradient(135deg, rgba(106,27,154,0.1) 0%, rgba(53,17,83,0.06) 100%)",
+                            textAlign: "center",
+                          }}
+                        >
+                          <Typography sx={{ color: "#6b5a7a", fontSize: "0.9rem", fontWeight: 600 }}>
+                            Total Salary
+                          </Typography>
+                          <Typography sx={{ fontSize: { xs: "1.8rem", md: "2.2rem" }, fontWeight: 800, color: "#351153", lineHeight: 1.1 }}>
+                            {formatINR(finalNetSalary)}
+                          </Typography>
+                        </Box>
+                      </Box>
+                      <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2, mt: 2 }}>
+                        <Button
+                          variant="contained"
+                          sx={styles.primaryButton}
+                          onClick={calculateNetSalary}
+                          size={isMobile ? "small" : "medium"}
+                        >
+                          Review & Calculate
+                        </Button>
+                        <Button
+                          variant="contained"
+                          sx={styles.confirmButton}
+                          onClick={handleGeneratePayslip}
+                          disabled={sendingEmail || emailSent || netSalary === null}
+                          size={isMobile ? "small" : "medium"}
+                        >
+                          {sendingEmail ? "Sending..." : emailSent ? "Email Sent" : netSalary === null ? "Review First" : "Generate Payslip"}
+                        </Button>
+                      </Box>
+                    </Paper>
+                  </Grid>
+                </Grid>
+              </Box>
+            )}
+
+            {(attendanceRecords.length > 0 || attendanceError) && (
+              <Box sx={{ mt: 4 }}>
+                <Typography variant="subtitle1" sx={styles.sectionTitle}>
+                  Attendance Report ({format(selectedDate, "MMMM yyyy")})
+                </Typography>
+                {attendanceError && (
+                  <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+                    {attendanceError}
+                  </Alert>
+                )}
+                {attendanceRecords.length > 0 && (
+                  <>
+                    <Grid container spacing={2} sx={{ mb: 2 }}>
+                      <Grid item xs={12} sm={6} md={2.4}>
+                        <Paper sx={{ ...styles.panel, p: 2 }}>
+                          <Typography sx={styles.statLabel}>Total Records</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800 }}>
+                            {attendanceSummary.total}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={12} sm={6} md={2.4}>
+                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e8f5e8" }}>
+                          <Typography sx={styles.statLabel}>Present</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#2e7d32" }}>
+                            {attendanceSummary.present}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={12} sm={6} md={2.4}>
+                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#ffebee" }}>
+                          <Typography sx={styles.statLabel}>Absent</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#d32f2f" }}>
+                            {attendanceSummary.absent}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={12} sm={6} md={2.4}>
+                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e3f2fd" }}>
+                          <Typography sx={styles.statLabel}>Week Off</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#0288d1" }}>
+                            {attendanceSummary.weekOff}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                      <Grid item xs={12} sm={6} md={2.4}>
+                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#fff8e1" }}>
+                          <Typography sx={styles.statLabel}>Holiday</Typography>
+                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#ed6c02" }}>
+                            {attendanceSummary.holiday}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                    </Grid>
+
+                  <TableContainer component={Paper} sx={styles.panel}>
+                    <Table sx={{ minWidth: 1100, tableLayout: "fixed" }}>
+                      <TableHead>
+                        <TableRow sx={{ backgroundColor: "#351153" }}>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Date</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Day</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "16%" }}>Employee</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Status</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time In</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time Out</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "12%" }}>Working Hours</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Late Arrival</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Missed Times</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Location</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {attendanceRecords.map((record, index) => {
+                          const derivedStatus = getDerivedAttendanceStatus(record);
+                          const statusBucket = getAttendanceStatusBucket(record);
+                          const displayStatus = statusBucket || derivedStatus;
+                          const lateArrivalMinutes = getLateArrivalMinutes(record);
+                          const statusColor =
+                            statusBucket === "Present"
+                              ? "success"
+                              : statusBucket === "Absent"
+                              ? "error"
+                              : derivedStatus === "Late"
+                              ? "warning"
+                              : statusBucket === "Week Off"
+                              ? "info"
+                              : statusBucket === "Holiday" || derivedStatus === "Leave"
+                              ? "secondary"
+                              : "default";
+
+                          return (
+                            <TableRow key={record.id ?? `${record.date || "row"}-${index}`} hover>
+                              <TableCell>{formatAttendanceDate(record.date)}</TableCell>
+                              <TableCell>{formatDayName(record.date)}</TableCell>
+                              <TableCell>
+                                {record.employee
+                                  ? `${record.employee.firstName || ""} ${record.employee.lastName || ""}`.trim()
+                                  : data?.firstName
+                                  ? `${data.firstName} ${data.lastName || ""}`.trim()
+                                  : "-"}
+                              </TableCell>
+                              <TableCell>
+                                <Chip label={displayStatus} color={statusColor} size="small" />
+                              </TableCell>
+                              <TableCell>{formatTimeValue(record.timeIn)}</TableCell>
+                              <TableCell>{formatTimeValue(record.timeOut)}</TableCell>
+                              <TableCell>{formatWorkingHours(record.timeIn, record.timeOut)}</TableCell>
+                              <TableCell>
+                                {lateArrivalMinutes > 0 ? (
+                                  <Chip
+                                    label={`${lateArrivalMinutes} min`}
+                                    color="warning"
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                ) : (
+                                  "-"
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Chip
+                                  label={`${record.missedTimes || 0} min`}
+                                  color={record.missedTimes > 0 ? "error" : "success"}
+                                  size="small"
+                                  variant="outlined"
+                                />
+                              </TableCell>
+                              <TableCell>{record.location || "-"}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                  </>
+                )}
+              </Box>
+            )}
+
+          </Box>
+
+          <Dialog
+            open={payslipPreviewOpen}
+            onClose={() => !sendingEmail && setPayslipPreviewOpen(false)}
+            fullWidth
+            maxWidth="sm"
+            PaperProps={{
+              sx: {
+                backgroundColor: "#ffffff",
+                color: "#2a1e3f",
+                border: "1px solid rgba(53,17,83,0.15)",
+              },
+            }}
+          >
+            <DialogTitle sx={{ fontWeight: 700 }}>Payslip Preview</DialogTitle>
+            <DialogContent dividers sx={{ borderColor: "rgba(53,17,83,0.12)" }}>
+              <Box sx={{ display: "grid", gap: 1.2 }}>
+                <Typography><strong>Employee:</strong> {data?.firstName || ""} {data?.lastName || ""}</Typography>
+                <Typography><strong>Period:</strong> {format(selectedDate, "MMMM yyyy")}</Typography>
+                <Typography><strong>Basic Salary:</strong> {formatINR(data?.salary || 0)}</Typography>
+                <Box sx={{ border: "1px solid rgba(53,17,83,0.14)", borderRadius: 1.5, p: 1.2 }}>
+                  <Typography sx={{ fontWeight: 700, mb: 0.6 }}>Earnings</Typography>
+                  {previewEarnings.length > 0 ? (
+                    previewEarnings.map((item, idx) => (
+                      <Box key={`earning-${idx}`} sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
+                        <Typography sx={{ color: "#4a3b61" }}>{item.label}</Typography>
+                        <Typography sx={{ fontWeight: 600 }}>{formatINR(item.amount)}</Typography>
+                      </Box>
+                    ))
+                  ) : (
+                    <Typography sx={{ color: "#6b5a7a" }}>No earnings added</Typography>
+                  )}
+                </Box>
+                <Box sx={{ border: "1px solid rgba(53,17,83,0.14)", borderRadius: 1.5, p: 1.2 }}>
+                  <Typography sx={{ fontWeight: 700, mb: 0.6 }}>Deductions</Typography>
+                  {previewDeductions.length > 0 ? (
+                    previewDeductions.map((item, idx) => (
+                      <Box key={`deduction-${idx}`} sx={{ display: "flex", justifyContent: "space-between", py: 0.25 }}>
+                        <Typography sx={{ color: "#4a3b61" }}>{item.label}</Typography>
+                        <Typography sx={{ fontWeight: 600 }}>{formatINR(item.amount)}</Typography>
+                      </Box>
+                    ))
+                  ) : (
+                    <Typography sx={{ color: "#6b5a7a" }}>No deductions added</Typography>
+                  )}
+                  {SHOW_PF_SECTION && parseNumber(paymentDetails.pfPercentage) > 0 && (
+                    <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", mt: 0.4 }}>
+                      PF is calculated on Basic Salary {formatINR(pfBaseSalary)}
+                    </Typography>
+                  )}
+                  {lopDeductionAmount > 0 && (
+                    <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem" }}>
+                      LOP: {lopDays} day{lopDays === 1 ? "" : "s"}
+                    </Typography>
+                  )}
+                </Box>
+                <Box sx={{ borderTop: "1px solid rgba(53,17,83,0.12)", pt: 1.2, mt: 0.5 }}>
+                  <Typography sx={{ fontSize: "1.2rem", fontWeight: 800, color: "#351153" }}>
+                    Final Net Salary: {formatINR(finalNetSalary)}
+                  </Typography>
+                </Box>
+                <Typography sx={{ color: "#6b5a7a", fontSize: "0.88rem" }}>
+                  This payslip PDF will be sent to: {data?.email || "N/A"}
+                </Typography>
+              </Box>
+            </DialogContent>
+            <DialogActions sx={{ p: 2 }}>
+              <Button
+                variant="outlined"
+                onClick={() => setPayslipPreviewOpen(false)}
+                disabled={sendingEmail}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="contained"
+                sx={styles.confirmButton}
+                onClick={sendConfirmationEmail}
+                disabled={sendingEmail}
+              >
+                {sendingEmail ? "Sending..." : "Confirm & Send Email"}
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          <Snackbar
+            open={openSnackbar}
+            autoHideDuration={6000}
+            onClose={handleCloseSnackbar}
+            anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+          >
+            <Alert
+              onClose={handleCloseSnackbar}
+              severity="success"
+              sx={{ width: "100%" }}
+            >
+              Net salary calculated successfully!
+            </Alert>
+          </Snackbar>
+        </Container>
+      </Box>
+    </LocalizationProvider>
+  );
+}
+
+export default EmployeePayrollViewer; 

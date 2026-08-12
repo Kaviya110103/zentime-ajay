@@ -1,0 +1,33 @@
+# Dependencies and generated output
+**/node_modules/
+**/target/
+**/build/
+**/dist/
+**/.expo/
+**/.gradle/
+**/coverage/
+
+# Local configuration and credentials
+**/.env
+**/.env.*
+!**/.env.example
+**/credentials.json
+**/local.properties
+**/*.keystore
+**/*.jks
+
+# Runtime files, uploads, and packaged releases
+**/logs/
+**/uploads/
+**/*.log
+**/hs_err_pid*.log
+**/*.jar
+**/*.war
+**/*.apk
+**/*.aab
+
+# IDE and OS files
+**/.idea/
+**/.vscode/
+**/.DS_Store
+Thumbs.db

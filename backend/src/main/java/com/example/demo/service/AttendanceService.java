@@ -1,0 +1,82 @@
+package com.example.demo.service;
+
+import com.example.demo.MODELS.AttendanceRecord;
+import com.example.demo.MODELS.AttendanceRecordDTO;
+import com.example.demo.MODELS.Employee;
+import com.example.demo.repo.AttendanceRecordRepository;
+import com.example.demo.repo.EmployeeRepository;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Service
+public class AttendanceService {
+
+    @Autowired
+    private AttendanceRecordRepository attendanceRepo;
+
+    @Autowired
+    private EmployeeRepository employeeRepo;
+
+    public Optional<AttendanceRecord> getLatestAttendanceRecord(Long employeeId) {
+        Optional<Employee> emp = employeeRepo.findById(employeeId);
+        if (emp.isEmpty()) return Optional.empty();
+
+        return attendanceRepo.findLatestByEmployee(emp.get());
+    }
+
+    
+    
+public List<AttendanceRecord> getTodayAbsentRecords() {
+    return getTodayAbsentRecords(null);
+}
+
+public List<AttendanceRecord> getTodayAbsentRecords(Long clientId) {
+    return getTodayAbsentRecords(clientId, null);
+}
+
+public List<AttendanceRecord> getTodayAbsentRecords(Long clientId, String branch) {
+    LocalDate today = LocalDate.now();
+    List<String> dateCandidates = List.of(
+            today.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+            today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
+            today.format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+    );
+
+    List<AttendanceRecord> records = branch == null || branch.isBlank()
+            ? attendanceRepo.findByStatusAndDatesAndClient("Absent", dateCandidates, clientId)
+            : attendanceRepo.findByStatusAndDatesAndClientAndBranch("Absent", dateCandidates, clientId, branch);
+    Map<Long, AttendanceRecord> unique = new LinkedHashMap<>();
+    for (AttendanceRecord record : records) {
+        if (record != null && record.getId() != null) {
+            unique.putIfAbsent(record.getId(), record);
+        }
+    }
+    return new ArrayList<>(unique.values());
+}
+
+public long countTodayAbsentRecords(Long clientId) {
+    LocalDate today = LocalDate.now();
+    List<String> dateCandidates = List.of(
+            today.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")),
+            today.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")),
+            today.format(DateTimeFormatter.ofPattern("dd-MM-yyyy"))
+    );
+    return attendanceRepo.countByStatusAndDatesAndClient("Absent", dateCandidates, clientId);
+}
+
+
+
+public List<AttendanceRecord> getMonthlyAttendanceForEmployee(Long employeeId) {
+    throw new UnsupportedOperationException("Unimplemented method 'getMonthlyAttendanceForEmployee'");
+}
+
+}

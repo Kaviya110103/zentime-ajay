@@ -1,0 +1,94 @@
+{
+  "expo": {
+    "name": "ZenTime",
+    "slug": "mynewapp",
+    "version": "1.1.13",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "scheme": "zentime",
+
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wingroo.MyNewApp",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to take attendance photos.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library.",
+        "NSLocationWhenInUseUsageDescription": "ZenTime uses your location to mark attendance.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ZenTime uses your location for attendance tracking.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+
+    "android": {
+      "package": "com.wingroo.MyNewApp",
+      "versionCode": 24,
+      "userInterfaceStyle": "automatic",
+      "googleServicesFile": "./google-services.json",
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "INTERNET",
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS"
+      ],
+      "adaptiveIcon": {
+         "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A3D62"},
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_GOOGLE_MAPS_KEY"
+        }
+      }
+    },
+
+    "web": {
+      "favicon": "./assets/images/favicon.png"
+    },
+
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "expo-notifications",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow ZenTime to access your camera to take attendance photos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow ZenTime to access your gallery.",
+          "cameraPermission": "Allow ZenTime to use your camera."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow ZenTime to use your location for attendance tracking.",
+          "locationAlwaysAndWhenInUsePermission": "Allow ZenTime to track your location while using the app."
+        }
+      ]
+    ],
+
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "68c86a54-8a28-43f9-a69c-abcf3b7760af"
+      }
+    },
+
+    "owner": "zentime2025"
+  }
+}
