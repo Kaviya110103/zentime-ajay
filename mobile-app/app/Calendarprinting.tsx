@@ -50,6 +50,7 @@ const EmployeeAttendanceReport = () => {
   const [printData, setPrintData] = useState<AttendanceReport[]>([]);
   const [client, setClient] = useState<any>(null);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [reportError, setReportError] = useState('');
   const [summary, setSummary] = useState<AttendanceSummary>({
     total: 0,
     present: 0,
@@ -145,6 +146,7 @@ const EmployeeAttendanceReport = () => {
     
     setLoading(true);
     try {
+      setReportError('');
       let month = currentDate.getMonth() + 1;
       let year = currentDate.getFullYear();
       
@@ -159,6 +161,14 @@ const EmployeeAttendanceReport = () => {
         return value;
       };
 
+      const resolveReportDateValue = (item: any) =>
+        item?.date ||
+        item?.attendanceDate ||
+        item?.recordDate ||
+        item?.localDate ||
+        item?.formattedDate ||
+        null;
+
       const response = await axios.get(
         buildApiUrl('/api/attendance-records/by-employee-month'),
         {
@@ -169,8 +179,8 @@ const EmployeeAttendanceReport = () => {
       let sourceData: any[] = Array.isArray(response.data) ? response.data : [];
 
       sourceData = sourceData
-        .filter((item: any) => isSameReportMonth(item?.date, month, year))
-        .sort((a: any, b: any) => compareReportDates(a?.date, b?.date));
+        .filter((item: any) => isSameReportMonth(resolveReportDateValue(item), month, year))
+        .sort((a: any, b: any) => compareReportDates(resolveReportDateValue(a), resolveReportDateValue(b)));
 
       const formattedData = sourceData.map((item: any) => {
         const employeeInfo = item.employee || {};
@@ -188,7 +198,7 @@ const EmployeeAttendanceReport = () => {
           firstName: rowFirstName,
           lastName: rowLastName,
           name: rowFullName || item.name || employeeDisplayName,
-          date: normalizeDateLabel(item.date),
+          date: normalizeDateLabel(resolveReportDateValue(item)),
           timeIn: item.timeIn,
           timeOut: item.timeOut,
           workingHours: formatWorkedMinutes(item.workedMinutes) || formatWorkedHours(item.workedHours) || calculateWorkingHours(item.timeIn, item.timeOut),
@@ -204,10 +214,14 @@ const EmployeeAttendanceReport = () => {
       setSummary(buildAttendanceSummary(formattedData));
       setInitialLoadComplete(true);
     } catch (error: any) {
-      console.error('Error fetching report data:', error);
+      console.warn('Error fetching report data:', error?.message || error);
       setReportData([]);
       setPrintData([]);
-      setSummary({ total: 0, present: 0, absent: 0, weekOff: 0, holiday: 0 });
+      setReportError(
+        error?.response?.data?.message ||
+          error?.message ||
+          'Unable to fetch attendance report. Please try again.'
+      );
       
       console.warn('Monthly report background fetch failed:', error?.message || error);
     } finally {
@@ -239,6 +253,14 @@ const EmployeeAttendanceReport = () => {
     if (dmy) return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
     const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
     if (ymd) return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+    const isoDateTime = /^(\d{4})-(\d{2})-(\d{2})[T\s]/.exec(value);
+    if (isoDateTime) {
+      return new Date(
+        Number(isoDateTime[1]),
+        Number(isoDateTime[2]) - 1,
+        Number(isoDateTime[3])
+      );
+    }
     return null;
   };
 
@@ -631,30 +653,37 @@ const EmployeeAttendanceReport = () => {
           </View>
           
           <ScrollView style={styles.printScroll}>
-            <View style={styles.summaryGrid}>
-              <View style={[styles.summaryCard, summaryCardThemeStyle]}>
-                <Text style={[styles.summaryValue, summaryValueThemeStyle]}>{summary.total}</Text>
-                <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Total Records</Text>
+            {reportError ? (
+              <View style={[styles.errorContainer, { borderColor: colors.border }]}>
+                <Text style={styles.errorTitle}>Unable to load report</Text>
+                <Text style={[styles.errorText, { color: colors.mutedText }]}>{reportError}</Text>
               </View>
-              <View style={[styles.summaryCard, summaryCardThemeStyle]}>
-                <Text style={[styles.summaryValue, presentValueThemeStyle]}>{summary.present}</Text>
-                <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Present</Text>
+            ) : (
+              <View style={styles.summaryGrid}>
+                <View style={[styles.summaryCard, summaryCardThemeStyle]}>
+                  <Text style={[styles.summaryValue, summaryValueThemeStyle]}>{summary.total}</Text>
+                  <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Total Records</Text>
+                </View>
+                <View style={[styles.summaryCard, summaryCardThemeStyle]}>
+                  <Text style={[styles.summaryValue, presentValueThemeStyle]}>{summary.present}</Text>
+                  <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Present</Text>
+                </View>
+                <View style={[styles.summaryCard, summaryCardThemeStyle]}>
+                  <Text style={[styles.summaryValue, absentValueThemeStyle]}>{summary.absent}</Text>
+                  <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Absent</Text>
+                </View>
+                <View style={[styles.summaryCard, summaryCardThemeStyle]}>
+                  <Text style={[styles.summaryValue, weekOffValueThemeStyle]}>{summary.weekOff}</Text>
+                  <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Week Off</Text>
+                </View>
+                <View style={[styles.summaryCard, summaryCardThemeStyle]}>
+                  <Text style={[styles.summaryValue, holidayValueThemeStyle]}>{summary.holiday}</Text>
+                  <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Holiday</Text>
+                </View>
               </View>
-              <View style={[styles.summaryCard, summaryCardThemeStyle]}>
-                <Text style={[styles.summaryValue, absentValueThemeStyle]}>{summary.absent}</Text>
-                <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Absent</Text>
-              </View>
-              <View style={[styles.summaryCard, summaryCardThemeStyle]}>
-                <Text style={[styles.summaryValue, weekOffValueThemeStyle]}>{summary.weekOff}</Text>
-                <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Week Off</Text>
-              </View>
-              <View style={[styles.summaryCard, summaryCardThemeStyle]}>
-                <Text style={[styles.summaryValue, holidayValueThemeStyle]}>{summary.holiday}</Text>
-                <Text style={[styles.summaryLabel, summaryLabelThemeStyle]}>Holiday</Text>
-              </View>
-            </View>
+            )}
 
-            {reportData.length === 0 ? (
+            {reportError ? null : reportData.length === 0 ? (
               <View style={styles.noDataContainer}>
                 <Text style={[styles.noDataText, { color: colors.mutedText }]}>No attendance records found for {getPeriodString()}</Text>
               </View>
@@ -865,6 +894,23 @@ const styles = StyleSheet.create({
   },
   holidayValue: {
     color: '#1976D2',
+  },
+  errorContainer: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
+    backgroundColor: '#FFF1F2',
+  },
+  errorTitle: {
+    color: '#BE123C',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  errorText: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   printTable: {
     marginBottom: 20,

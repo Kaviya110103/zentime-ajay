@@ -36,24 +36,30 @@ public class AttendanceMetricsService {
     private final AttendanceRecordRepository attendanceRecordRepository;
     private final EmployeeAdditionalWorkingDayRepository employeeAdditionalWorkingDayRepository;
     private final LeavePermissionRepository leavePermissionRepository;
+    private final ShiftResolverService shiftResolverService;
 
     public AttendanceMetricsService(
             EmployeeRepository employeeRepository,
             AttendanceRecordRepository attendanceRecordRepository,
             EmployeeAdditionalWorkingDayRepository employeeAdditionalWorkingDayRepository,
-            LeavePermissionRepository leavePermissionRepository) {
+            LeavePermissionRepository leavePermissionRepository,
+            ShiftResolverService shiftResolverService) {
         this.employeeRepository = employeeRepository;
         this.attendanceRecordRepository = attendanceRecordRepository;
         this.employeeAdditionalWorkingDayRepository = employeeAdditionalWorkingDayRepository;
         this.leavePermissionRepository = leavePermissionRepository;
+        this.shiftResolverService = shiftResolverService;
     }
 
     public int calculateDailyLateMinutes(AttendanceRecord record) {
         if (record == null || record.getTimeIn() == null) {
             return 0;
         }
-        ShiftWindow shiftWindow = resolveShiftWindow(record);
-        LocalTime shiftStart = shiftWindow.start();
+        ShiftResolverService.ShiftResolution shiftWindow = resolveShiftWindow(record);
+        LocalTime shiftStart = shiftWindow.expectedShiftStart();
+        if (shiftStart == null || shiftWindow.expectedMinutes() <= 0) {
+            return 0;
+        }
         LocalTime timeIn = record.getTimeIn().toLocalTime();
         if (!timeIn.isAfter(shiftStart)) {
             return 0;
@@ -65,8 +71,11 @@ public class AttendanceMetricsService {
         if (record == null || record.getTimeOut() == null) {
             return 0;
         }
-        ShiftWindow shiftWindow = resolveShiftWindow(record);
-        LocalTime shiftEnd = shiftWindow.end();
+        ShiftResolverService.ShiftResolution shiftWindow = resolveShiftWindow(record);
+        LocalTime shiftEnd = shiftWindow.expectedShiftEnd();
+        if (shiftEnd == null || shiftWindow.expectedMinutes() <= 0) {
+            return 0;
+        }
         LocalTime timeOut = record.getTimeOut().toLocalTime();
         if (!timeOut.isBefore(shiftEnd)) {
             return 0;
@@ -262,22 +271,29 @@ public class AttendanceMetricsService {
         return PayrollCompatibilityDefaults.resolveShiftEnd(employee);
     }
 
-    private ShiftWindow resolveShiftWindow(AttendanceRecord record) {
-        Employee employee = record == null ? null : record.getEmployee();
-        LocalTime defaultStart = resolveShiftStart(employee);
-        LocalTime defaultEnd = resolveShiftEnd(employee);
+    private ShiftResolverService.ShiftResolution resolveShiftWindow(AttendanceRecord record) {
+        if (record == null) {
+            return shiftResolverService.resolve((Employee) null, null, null);
+        }
+        LocalTime snapshotStart = shiftResolverService.parseFlexibleTime(record.getExpectedShiftStart()).orElse(null);
+        LocalTime snapshotEnd = shiftResolverService.parseFlexibleTime(record.getExpectedShiftEnd()).orElse(null);
+        if (snapshotStart != null && snapshotEnd != null && snapshotEnd.isAfter(snapshotStart)) {
+            int minutes = record.getExpectedMinutes() == null
+                    ? (int) Duration.between(snapshotStart, snapshotEnd).toMinutes()
+                    : Math.max(0, record.getExpectedMinutes());
+            return new ShiftResolverService.ShiftResolution(
+                    snapshotStart,
+                    snapshotEnd,
+                    minutes,
+                    record.getShiftSource() == null ? "SNAPSHOT" : record.getShiftSource(),
+                    minutes > 0,
+                    false,
+                    false,
+                    false);
+        }
+        Employee employee = record.getEmployee();
         LocalDate date = resolveRecordDate(record);
-        EmployeeAdditionalWorkingDay additionalDay = resolveAdditionalWorkingDay(employee, date);
-        if (additionalDay == null) {
-            return new ShiftWindow(defaultStart, defaultEnd);
-        }
-
-        Optional<LocalTime> additionalStart = parseFlexibleTime(additionalDay.getTimeIn());
-        Optional<LocalTime> additionalEnd = parseFlexibleTime(additionalDay.getTimeOut());
-        if (additionalStart.isEmpty() || additionalEnd.isEmpty()) {
-            return new ShiftWindow(defaultStart, defaultEnd);
-        }
-        return new ShiftWindow(additionalStart.get(), additionalEnd.get());
+        return shiftResolverService.resolve(employee, date, employee == null ? null : employee.getClientId());
     }
 
     private LocalDate resolveRecordDate(AttendanceRecord record) {
@@ -341,27 +357,7 @@ public class AttendanceMetricsService {
         }
 
         AdditionalWorkingDayType type = resolveAdditionalWorkingType(date);
-        return resolveAdditionalDayFromMap(type, additionalMap);
-    }
-
-    private EmployeeAdditionalWorkingDay resolveAdditionalDayFromMap(
-            AdditionalWorkingDayType type,
-            Map<AdditionalWorkingDayType, EmployeeAdditionalWorkingDay> additionalMap) {
-        if (type == null || additionalMap == null || additionalMap.isEmpty()) {
-            return null;
-        }
-
-        EmployeeAdditionalWorkingDay exact = additionalMap.get(type);
-        if (exact != null) {
-            return exact;
-        }
-
-        return switch (type) {
-            case ODD_SATURDAY -> additionalMap.get(AdditionalWorkingDayType.EVEN_SATURDAY);
-            case EVEN_SATURDAY -> additionalMap.get(AdditionalWorkingDayType.ODD_SATURDAY);
-            case ODD_SUNDAY -> additionalMap.get(AdditionalWorkingDayType.EVEN_SUNDAY);
-            case EVEN_SUNDAY -> additionalMap.get(AdditionalWorkingDayType.ODD_SUNDAY);
-        };
+        return additionalMap.get(type);
     }
 
     private AdditionalWorkingDayType resolveAdditionalWorkingType(LocalDate date) {

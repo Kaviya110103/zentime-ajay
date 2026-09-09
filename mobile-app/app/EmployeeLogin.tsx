@@ -125,11 +125,17 @@ const EmployeeLogin = () => {
 
       if (response.ok) {
         if (data && data.id) {
-          await AsyncStorage.setItem(WALKTHROUGH_DONE_KEY, 'true');
           await setEmployee(data);
-          await notifyEmployeeLogin(data);
+          void AsyncStorage.setItem(WALKTHROUGH_DONE_KEY, 'true').catch((storageError) => {
+            console.warn("[EmployeeLogin] Failed to persist walkthrough state", storageError);
+          });
           showMessage("Login successful!", "#16A34A");
           router.replace("/WelcomeBack");
+          setTimeout(() => {
+            void notifyEmployeeLogin(data).catch((notificationError) => {
+              console.warn("[EmployeeLogin] Login notification setup failed", notificationError);
+            });
+          }, 0);
         } else {
           if (!silent) showInvalidCredentialsAlert();
         }
@@ -180,10 +186,6 @@ const EmployeeLogin = () => {
     setMessage("");
   };
 
-  const handleOpenAdminLogin = () => {
-    router.push("/AdminLogin");
-  };
-
   if (isLoading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
@@ -219,9 +221,6 @@ const EmployeeLogin = () => {
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleLogout}>
                   <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Logout</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleOpenAdminLogin}>
-                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Login as Admin</Text>
                 </TouchableOpacity>
                 {message ? (
                   <Text style={[styles.message, { color: messageColor }]}>{message}</Text>
@@ -284,8 +283,12 @@ const EmployeeLogin = () => {
                   <Text style={styles.buttonText}>LOGIN</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleOpenAdminLogin}>
-                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Login as Admin</Text>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { borderColor: colors.primary }]}
+                  onPress={() => router.push("/AdminLogin")}
+                  disabled={isLoading}
+                >
+                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Admin Login</Text>
                 </TouchableOpacity>
 
                 {message ? (

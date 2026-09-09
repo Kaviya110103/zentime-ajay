@@ -1,12 +1,12 @@
 type QueryValue = string | number | boolean | null | undefined;
 
-const PRODUCTION_API_BASE_URL = "https://test2.zentime.co.in";
+const DEFAULT_API_BASE_URL = "https://iie.zentime.co.in";
 
 function normalizeBaseUrl(rawBaseUrl?: string | null): string {
   return String(rawBaseUrl || "").trim().replace(/\s+/g, "").replace(/\/+$/, "");
 }
 
-export const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL) || PRODUCTION_API_BASE_URL;
+export const API_BASE_URL = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL) || DEFAULT_API_BASE_URL;
 
 export function resolveAssetUrl(rawUrl?: string | null): string {
   const value = (rawUrl || "").trim();

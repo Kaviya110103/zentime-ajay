@@ -134,6 +134,10 @@ public class V1__employee_schema_safety_net extends BaseJavaMigration {
     }
 
     private void ensureHolidayTable(Connection connection) throws Exception {
+        if (tableExists(connection, "holidays")) {
+            ensureColumn(connection, "holidays", "branch_scope", "VARCHAR(255) NOT NULL DEFAULT 'ALL'");
+            return;
+        }
         execute(connection, """
                 CREATE TABLE IF NOT EXISTS holidays (
                     id BIGINT NOT NULL AUTO_INCREMENT,
@@ -141,8 +145,9 @@ public class V1__employee_schema_safety_net extends BaseJavaMigration {
                     holiday_date DATE NOT NULL,
                     holiday_name VARCHAR(255) NOT NULL,
                     holiday_type VARCHAR(16) NOT NULL,
+                    branch_scope VARCHAR(255) NOT NULL DEFAULT 'ALL',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_holidays_client_date (client_id, holiday_date)
+                    UNIQUE KEY uk_holidays_client_date_branch (client_id, holiday_date, branch_scope)
                 )
                 """);
     }

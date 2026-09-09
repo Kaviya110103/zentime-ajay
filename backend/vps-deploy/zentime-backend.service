@@ -1,0 +1,17 @@
+[Unit]
+Description=Zentime Backend
+After=network.target
+
+[Service]
+Type=simple
+User=zentime
+Group=zentime
+WorkingDirectory=/opt/zentime/backend
+EnvironmentFile=/opt/zentime/backend/.env
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/zentime/backend/application.jar
+Restart=always
+RestartSec=10
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target

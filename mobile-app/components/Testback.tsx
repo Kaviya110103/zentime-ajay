@@ -340,22 +340,6 @@ const AttendanceFlow: React.FC = () => {
     );
   }
 
-  if (holidayLoading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  if (leaveLoading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
   // Render based on view
   if (view === "start") {
     if (holidayToday) {
@@ -396,6 +380,9 @@ const AttendanceFlow: React.FC = () => {
   return (
     <>
       <View style={styles.centerContainer}>
+        {(holidayLoading || leaveLoading) ? (
+          <ActivityIndicator size="small" color={colors.primary} style={styles.inlineStatusLoader} />
+        ) : null}
         <TouchableOpacity
           style={[styles.touchIconBox, actionCardStyle, isDisabled && styles.disabledBox]}
           onPress={handleActionPress}
@@ -614,6 +601,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(53,17,83,0.1)",
   },
   disabledBox: {
+  },
+  inlineStatusLoader: {
+    marginBottom: 12,
   },
   touchText: {
     marginTop: 10,

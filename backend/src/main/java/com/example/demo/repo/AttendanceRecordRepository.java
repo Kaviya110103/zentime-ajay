@@ -32,7 +32,8 @@ List<AttendanceRecord> findByEmployee_ClientIdOrderByIdDesc(Long clientId, Pagea
 @Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
        "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
        "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
-       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
        "FROM AttendanceRecord a LEFT JOIN a.employee e " +
        "WHERE (:clientId IS NULL OR e.clientId = :clientId) " +
        "ORDER BY a.id DESC")
@@ -43,7 +44,8 @@ List<Object[]> findAttendanceRecordRows(
 @Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
        "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
        "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
-       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
        "FROM AttendanceRecord a LEFT JOIN a.employee e " +
        "WHERE e.id = :employeeId AND a.date IN :dates " +
        "AND (:clientId IS NULL OR e.clientId = :clientId) " +
@@ -52,6 +54,121 @@ List<Object[]> findAttendanceRecordRowsByEmployeeAndDates(
         @Param("employeeId") Long employeeId,
         @Param("dates") List<String> dates,
         @Param("clientId") Long clientId);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE (:clientId IS NULL OR e.clientId = :clientId) " +
+       "AND (:employeeId IS NULL OR e.id = :employeeId) " +
+       "AND (:branch IS NULL OR LOWER(TRIM(e.branch)) = :branch) " +
+       "AND (:datesEmpty = true OR a.date IN :dates) " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsForSearch(
+        @Param("clientId") Long clientId,
+        @Param("employeeId") Long employeeId,
+        @Param("branch") String branch,
+        @Param("dates") List<String> dates,
+        @Param("datesEmpty") boolean datesEmpty,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND e.id = :employeeId " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientAndEmployeeForSearch(
+        @Param("clientId") Long clientId,
+        @Param("employeeId") Long employeeId,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND LOWER(TRIM(e.branch)) = :branch " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientAndBranchForSearch(
+        @Param("clientId") Long clientId,
+        @Param("branch") String branch,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND e.id = :employeeId AND LOWER(TRIM(e.branch)) = :branch " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientEmployeeAndBranchForSearch(
+        @Param("clientId") Long clientId,
+        @Param("employeeId") Long employeeId,
+        @Param("branch") String branch,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND a.date IN :dates " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientAndDatesForSearch(
+        @Param("clientId") Long clientId,
+        @Param("dates") List<String> dates,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND e.id = :employeeId AND a.date IN :dates " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientEmployeeAndDatesForSearch(
+        @Param("clientId") Long clientId,
+        @Param("employeeId") Long employeeId,
+        @Param("dates") List<String> dates,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND LOWER(TRIM(e.branch)) = :branch AND a.date IN :dates " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientBranchAndDatesForSearch(
+        @Param("clientId") Long clientId,
+        @Param("branch") String branch,
+        @Param("dates") List<String> dates,
+        Pageable pageable);
+
+@Query("SELECT a.id, a.timeIn, a.timeOut, a.dayStatus, a.location, a.attendanceStatus, a.date, " +
+       "a.missedTimes, a.workedHours, a.overtime, a.permissionUsed, a.shiftId, " +
+       "e.id, e.firstName, e.lastName, e.branch, e.employeeCode, e.weekOff, " +
+       "e.shiftStartTime, e.shiftEndTime, e.leavePolicyType, " +
+       "a.expectedShiftStart, a.expectedShiftEnd, a.expectedMinutes, a.shiftSource " +
+       "FROM AttendanceRecord a LEFT JOIN a.employee e " +
+       "WHERE e.clientId = :clientId AND e.id = :employeeId AND LOWER(TRIM(e.branch)) = :branch AND a.date IN :dates " +
+       "ORDER BY a.id DESC")
+List<Object[]> findAttendanceRecordRowsByClientEmployeeBranchAndDatesForSearch(
+        @Param("clientId") Long clientId,
+        @Param("employeeId") Long employeeId,
+        @Param("branch") String branch,
+        @Param("dates") List<String> dates,
+        Pageable pageable);
 List<AttendanceRecord> findByDateOrderByIdDesc(String date, Pageable pageable);
 List<AttendanceRecord> findByDateAndEmployee_ClientIdOrderByIdDesc(String date, Long clientId, Pageable pageable);
     List<AttendanceRecord> findByDateAndAttendanceStatus(String date, String attendanceStatus);
@@ -219,6 +336,16 @@ List<Object[]> findDashboardSummaryRowsByDatesAndClient(
         @Param("dates") List<String> dates,
         @Param("clientId") Long clientId,
         @Param("branch") String branch);
+
+@Query("SELECT a FROM AttendanceRecord a LEFT JOIN FETCH a.employee e " +
+       "WHERE e.id = :employeeId " +
+       "AND a.date IN :dates " +
+       "AND (:clientId IS NULL OR e.clientId = :clientId) " +
+       "ORDER BY a.id ASC")
+List<AttendanceRecord> findByEmployeeIdAndDatesWithEmployee(
+        @Param("employeeId") Long employeeId,
+        @Param("dates") List<String> dates,
+        @Param("clientId") Long clientId);
 
 @Query("SELECT COUNT(a) FROM AttendanceRecord a WHERE a.attendanceStatus = :status AND a.date IN :dates " +
        "AND (:clientId IS NULL OR (a.employee IS NOT NULL AND a.employee.clientId = :clientId))")

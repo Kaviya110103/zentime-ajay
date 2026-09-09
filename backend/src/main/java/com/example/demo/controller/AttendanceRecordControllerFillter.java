@@ -1,12 +1,19 @@
 package com.example.demo.controller;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,6 +51,8 @@ import java.util.stream.Collectors;
 @CrossOrigin(origins = "*")
 
 public class AttendanceRecordControllerFillter {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(AttendanceRecordControllerFillter.class);
 
     @Autowired
     private AttendanceRecordRepository attendanceRecordRepository;
@@ -186,7 +195,7 @@ public class AttendanceRecordControllerFillter {
 
     // 1. Get all attendance details
     @GetMapping("/all")
-    public ResponseEntity<List<Map<String, Object>>> getAllAttendanceRecords(
+    public ResponseEntity<?> getAllAttendanceRecords(
             @RequestParam(value = "clientId", required = false) Long clientId,
             @RequestParam(value = "limit", defaultValue = "200") int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 200));
@@ -197,7 +206,7 @@ public class AttendanceRecordControllerFillter {
             return ResponseEntity.ok(attendanceClassificationService.classifyRecordMaps(records, clientId));
         } catch (Exception ex) {
             ex.printStackTrace();
-            return ResponseEntity.ok(List.of());
+            return ResponseEntity.internalServerError().body(Map.of("message", "Unable to fetch attendance records."));
         }
     }
 
@@ -262,8 +271,138 @@ public class AttendanceRecordControllerFillter {
         employee.put("shiftStartTime", row[18]);
         employee.put("shiftEndTime", row[19]);
         employee.put("leavePolicyType", row[20]);
+        if (row.length > 21) {
+            record.put("expectedShiftStart", row[21]);
+        }
+        if (row.length > 22) {
+            record.put("expectedShiftEnd", row[22]);
+        }
+        if (row.length > 23) {
+            record.put("expectedMinutes", row[23]);
+        }
+        if (row.length > 24) {
+            record.put("shiftSource", row[24]);
+        }
         record.put("employee", employee);
         return record;
+    }
+
+    private List<Object[]> findSearchRowsNoDates(
+            Long clientId,
+            Long employeeId,
+            String branch,
+            Pageable pageable) {
+        if (clientId != null) {
+            if (employeeId != null && branch != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientEmployeeAndBranchForSearch(
+                        clientId, employeeId, branch, pageable);
+            }
+            if (employeeId != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientAndEmployeeForSearch(
+                        clientId, employeeId, pageable);
+            }
+            if (branch != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientAndBranchForSearch(
+                        clientId, branch, pageable);
+            }
+            return attendanceRecordRepository.findAttendanceRecordRows(clientId, pageable);
+        }
+        return attendanceRecordRepository.findAttendanceRecordRowsForSearch(
+                null, employeeId, branch, List.of(""), true, pageable);
+    }
+
+    private List<Object[]> findSearchRowsByDates(
+            Long clientId,
+            Long employeeId,
+            String branch,
+            List<String> dates,
+            Pageable pageable) {
+        if (clientId != null) {
+            if (employeeId != null && branch != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientEmployeeBranchAndDatesForSearch(
+                        clientId, employeeId, branch, dates, pageable);
+            }
+            if (employeeId != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientEmployeeAndDatesForSearch(
+                        clientId, employeeId, dates, pageable);
+            }
+            if (branch != null) {
+                return attendanceRecordRepository.findAttendanceRecordRowsByClientBranchAndDatesForSearch(
+                        clientId, branch, dates, pageable);
+            }
+            return attendanceRecordRepository.findAttendanceRecordRowsByClientAndDatesForSearch(
+                    clientId, dates, pageable);
+        }
+        return attendanceRecordRepository.findAttendanceRecordRowsForSearch(
+                null, employeeId, branch, dates, false, pageable);
+    }
+
+    @GetMapping("/search")
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> searchAttendanceRecords(
+            @RequestParam(value = "clientId", required = false) Long clientId,
+            @RequestParam(value = "employeeId", required = false) String employeeRef,
+            @RequestParam(value = "branch", required = false) String branch,
+            @RequestParam(value = "date", required = false) String date,
+            @RequestParam(value = "startDate", required = false) String startDate,
+            @RequestParam(value = "endDate", required = false) String endDate,
+            @RequestParam(value = "month", required = false) Integer month,
+            @RequestParam(value = "year", required = false) Integer year,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "page", defaultValue = "0") int page,
+            @RequestParam(value = "limit", defaultValue = "500") int limit) {
+        try {
+            Long employeeId = null;
+            Employee selectedEmployee = null;
+            if (employeeRef != null && !employeeRef.isBlank()) {
+                Optional<Employee> employee = resolveEmployeeByRef(employeeRef, clientId);
+                if (employee.isEmpty()) {
+                    return ResponseEntity.ok(List.of());
+                }
+                selectedEmployee = employee.get();
+                employeeId = selectedEmployee.getId();
+            }
+
+            DateRange range = resolveDateRange(date, startDate, endDate, month, year);
+            int safePage = Math.max(0, page);
+            int safeLimit = Math.max(1, Math.min(limit, 5000));
+            String normalizedBranch = normalizeBranch(branch);
+
+            List<Map<String, Object>> classified;
+            if (range != null) {
+                classified = searchCalendarBackedRecords(clientId, selectedEmployee, normalizedBranch, range);
+            } else {
+                List<Object[]> rows = findSearchRowsNoDates(
+                        clientId,
+                        employeeId,
+                        normalizedBranch,
+                        PageRequest.of(safePage, safeLimit));
+                List<Map<String, Object>> records = rows.stream().map(this::toAttendanceRecordMap).toList();
+                classified = attendanceClassificationService.classifyRecordMaps(records, clientId);
+            }
+
+            List<Map<String, Object>> statusFiltered = new ArrayList<>(filterByClassifiedStatus(classified, status));
+            statusFiltered.sort(this::compareRecordMapsNewestFirst);
+            int fromIndex = Math.min(safePage * safeLimit, statusFiltered.size());
+            int toIndex = Math.min(fromIndex + safeLimit, statusFiltered.size());
+            return ResponseEntity.ok(statusFiltered.subList(fromIndex, toIndex));
+        } catch (Exception ex) {
+            LOGGER.error(
+                    "Attendance records search failed clientId={} employeeRef={} branch={} date={} startDate={} endDate={} month={} year={} status={} page={} limit={}",
+                    clientId,
+                    employeeRef,
+                    branch,
+                    date,
+                    startDate,
+                    endDate,
+                    month,
+                    year,
+                    status,
+                    page,
+                    limit,
+                    ex);
+            return ResponseEntity.internalServerError().body(Map.of("message", "Unable to search attendance records."));
+        }
     }
 
     // 2. Get attendance details by employee ID
@@ -286,31 +425,69 @@ public class AttendanceRecordControllerFillter {
 
     // 3. Get attendance details by month and employee ID
     @GetMapping("/by-employee-month")
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> getAttendanceByEmployeeIdAndMonth(
             @RequestParam("employeeId") String employeeId,
             @RequestParam("month") int month,
             @RequestParam("year") int year,
             @RequestParam(value = "clientId", required = false) Long clientId) {
-        Optional<Employee> employee = resolveEmployeeByRef(employeeId);
-        if (employee.isEmpty()) {
-            return List.of();
-        }
-        YearMonth yearMonth = YearMonth.of(year, month);
-        LocalDate from = yearMonth.atDay(1);
-        LocalDate to = yearMonth.atEndOfMonth();
-        attendanceSchedulerService.ensureAbsentForEmployeeDateRange(employee.get(), from, to);
+        Long resolvedEmployeeId = null;
+        try {
+            Optional<Employee> employee = resolveEmployeeByRef(employeeId);
+            if (employee.isEmpty()) {
+                return List.of();
+            }
+            resolvedEmployeeId = employee.get().getId();
+            YearMonth yearMonth = YearMonth.of(year, month);
+            LocalDate from = yearMonth.atDay(1);
+            LocalDate to = yearMonth.atEndOfMonth();
+            List<String> monthDateCandidates = buildMonthDateCandidates(yearMonth);
+            List<AttendanceRecord> monthlyRecords = attendanceRecordRepository.findByEmployeeIdAndDatesWithEmployee(
+                    resolvedEmployeeId, monthDateCandidates, clientId);
 
-        List<AttendanceRecord> records = attendanceRecordRepository.findByEmployeeId(employee.get().getId())
-                .stream()
-                .filter(record -> isRecordInMonth(record, month, year))
-                .sorted(Comparator
-                        .comparing((AttendanceRecord record) -> parseFlexibleDate(record.getDate()),
-                                Comparator.nullsLast(Comparator.naturalOrder()))
-                        .thenComparing(record -> Optional.ofNullable(record.getId()).orElse(Long.MAX_VALUE)))
-                .toList();
-        safeSyncRecords(records);
-        applyResponseMissedTimes(records);
-        return attendanceClassificationService.classifyRecords(records, clientId);
+            Map<LocalDate, Map<String, Object>> recordsByDate = new LinkedHashMap<>();
+            for (AttendanceRecord record : monthlyRecords) {
+                LocalDate recordDate = parseFlexibleDate(record.getDate());
+                if (recordDate == null || recordDate.isBefore(from) || recordDate.isAfter(to)) {
+                    continue;
+                }
+                Map<String, Object> current = toAttendanceRecordMap(record);
+                Map<String, Object> existing = recordsByDate.get(recordDate);
+                if (shouldReplaceMonthlyRecord(existing, current)) {
+                    recordsByDate.put(recordDate, current);
+                }
+            }
+
+            List<Map<String, Object>> calendarRows = attendanceClassificationService.classifyCalendar(
+                    employee.get(), from, to, clientId);
+            List<Map<String, Object>> mergedRows = new ArrayList<>();
+            for (Map<String, Object> calendarRow : calendarRows) {
+                LocalDate recordDate = parseFlexibleDate(asText(calendarRow.get("date")));
+                Map<String, Object> actualRow = recordDate == null ? null : recordsByDate.get(recordDate);
+                if (actualRow == null) {
+                    mergedRows.add(calendarRow);
+                    continue;
+                }
+                Map<String, Object> merged = new LinkedHashMap<>(calendarRow);
+                merged.putAll(actualRow);
+                merged.put("date", calendarRow.get("date"));
+                merged.put("employeeId", calendarRow.get("employeeId"));
+                merged.put("employee", calendarRow.get("employee"));
+                mergedRows.add(merged);
+            }
+
+            return attendanceClassificationService.classifyRecordMaps(mergedRows, clientId);
+        } catch (Exception ex) {
+            LOGGER.error(
+                    "Monthly attendance report failed employeeRef={} resolvedEmployeeId={} clientId={} month={} year={}",
+                    employeeId,
+                    resolvedEmployeeId,
+                    clientId,
+                    month,
+                    year,
+                    ex);
+            throw ex;
+        }
     }
 
     @GetMapping("/by-employee-month-metrics")
@@ -614,6 +791,246 @@ private Optional<Employee> resolveEmployeeByRef(String employeeRef) {
     return Optional.empty();
 }
 
+private Optional<Employee> resolveEmployeeByRef(String employeeRef, Long clientId) {
+    Optional<Employee> employee = resolveEmployeeByRef(employeeRef);
+    if (employee.isEmpty() || clientId == null) {
+        return employee;
+    }
+    return clientId.equals(employee.get().getClientId()) ? employee : Optional.empty();
+}
+
+private List<Map<String, Object>> searchCalendarBackedRecords(
+        Long clientId,
+        Employee selectedEmployee,
+        String branch,
+        DateRange range) {
+    List<Employee> employees = resolveEmployeesForCalendar(clientId, selectedEmployee, branch);
+    if (employees.isEmpty()) {
+        return List.of();
+    }
+
+    List<String> dateCandidates = buildDateCandidates(range.start(), range.end());
+    Long employeeId = selectedEmployee == null ? null : selectedEmployee.getId();
+    List<Object[]> rows = findSearchRowsByDates(
+            clientId,
+            employeeId,
+            branch,
+            dateCandidates,
+            PageRequest.of(0, 100000));
+
+    Map<String, Map<String, Object>> actualByEmployeeDate = new LinkedHashMap<>();
+    for (Object[] row : rows) {
+        Map<String, Object> record = toAttendanceRecordMap(row);
+        Long rowEmployeeId = asLong(record.get("employeeId"));
+        LocalDate recordDate = parseFlexibleDate(asText(record.get("date")));
+        if (rowEmployeeId == null || recordDate == null) {
+            continue;
+        }
+        String key = rowEmployeeId + "|" + recordDate;
+        Map<String, Object> existing = actualByEmployeeDate.get(key);
+        if (shouldReplaceMonthlyRecord(existing, record)) {
+            actualByEmployeeDate.put(key, record);
+        }
+    }
+
+    List<Map<String, Object>> mergedRows = new ArrayList<>();
+    for (Employee employee : employees) {
+        for (LocalDate cursor = range.start(); !cursor.isAfter(range.end()); cursor = cursor.plusDays(1)) {
+            Map<String, Object> calendarRow = new LinkedHashMap<>();
+            calendarRow.put("id", null);
+            calendarRow.put("date", cursor.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+            calendarRow.put("attendanceStatus", null);
+            calendarRow.put("dayStatus", null);
+            calendarRow.put("timeIn", null);
+            calendarRow.put("timeOut", null);
+            calendarRow.put("missedTimes", 0);
+            calendarRow.put("location", null);
+            calendarRow.put("employeeId", employee.getId());
+            calendarRow.put("employee", toEmployeeMap(employee));
+
+            Map<String, Object> actual = actualByEmployeeDate.get(employee.getId() + "|" + cursor);
+            if (actual == null) {
+                mergedRows.add(calendarRow);
+                continue;
+            }
+            Map<String, Object> merged = new LinkedHashMap<>(calendarRow);
+            merged.putAll(actual);
+            merged.put("date", calendarRow.get("date"));
+            merged.put("employeeId", employee.getId());
+            merged.put("employee", calendarRow.get("employee"));
+            mergedRows.add(merged);
+        }
+    }
+
+    return attendanceClassificationService.classifyRecordMaps(mergedRows, clientId);
+}
+
+private List<Employee> resolveEmployeesForCalendar(Long clientId, Employee selectedEmployee, String branch) {
+    if (selectedEmployee != null) {
+        if (branch != null && !branch.equalsIgnoreCase(String.valueOf(selectedEmployee.getBranch()).trim())) {
+            return List.of();
+        }
+        return List.of(selectedEmployee);
+    }
+    if (clientId != null && branch != null) {
+        return employeeRepository.findByClientIdAndBranchIgnoreCase(clientId, branch);
+    }
+    if (clientId != null) {
+        return employeeRepository.findByClientId(clientId);
+    }
+    if (branch != null) {
+        return employeeRepository.findByBranchIgnoreCase(branch);
+    }
+    return employeeRepository.findAll();
+}
+
+private Map<String, Object> toEmployeeMap(Employee employeeSource) {
+    Map<String, Object> employee = new HashMap<>();
+    employee.put("id", employeeSource.getId());
+    employee.put("employeeId", employeeSource.getId());
+    employee.put("firstName", employeeSource.getFirstName());
+    employee.put("lastName", employeeSource.getLastName());
+    employee.put("branch", employeeSource.getBranch());
+    employee.put("employeeCode", employeeSource.getEmployeeCode());
+    employee.put("weekOff", employeeSource.getWeekOff());
+    employee.put("shiftStartTime", employeeSource.getShiftStartTime());
+    employee.put("shiftEndTime", employeeSource.getShiftEndTime());
+    employee.put("leavePolicyType", employeeSource.getLeavePolicyType());
+    return employee;
+}
+
+private List<String> buildDateCandidates(LocalDate start, LocalDate end) {
+    Set<String> dates = new LinkedHashSet<>();
+    for (LocalDate cursor = start; !cursor.isAfter(end); cursor = cursor.plusDays(1)) {
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("dd-MM-yyyy")));
+    }
+    return new ArrayList<>(dates);
+}
+
+private DateRange resolveDateRange(String date, String startDate, String endDate, Integer month, Integer year) {
+    LocalDate exactDate = parseFlexibleDate(date);
+    if (exactDate != null) {
+        return new DateRange(exactDate, exactDate);
+    }
+    if (month != null && year != null && month >= 1 && month <= 12 && year >= 1900) {
+        YearMonth yearMonth = YearMonth.of(year, month);
+        return new DateRange(yearMonth.atDay(1), yearMonth.atEndOfMonth());
+    }
+    LocalDate start = parseFlexibleDate(startDate);
+    LocalDate end = parseFlexibleDate(endDate);
+    if (start == null && end == null) {
+        return null;
+    }
+    if (start == null) {
+        start = end;
+    }
+    if (end == null) {
+        end = start;
+    }
+    if (end.isBefore(start)) {
+        return new DateRange(end, start);
+    }
+    return new DateRange(start, end);
+}
+
+private List<Map<String, Object>> filterByClassifiedStatus(List<Map<String, Object>> records, String status) {
+    String normalized = normalizeStatus(status);
+    if (normalized == null) {
+        return records;
+    }
+    return records.stream()
+            .filter(record -> {
+                if ("Late".equals(normalized)) {
+                    return "Present".equals(normalizeStatus(asText(record.get("countStatus"))))
+                            && asInt(record.get("lateMinutes")) > 0;
+                }
+                String countStatus = normalizeStatus(asText(record.get("countStatus")));
+                String displayStatus = normalizeStatus(asText(record.get("displayStatus")));
+                return normalized.equals(countStatus) || normalized.equals(displayStatus);
+            })
+            .toList();
+}
+
+private String normalizeStatus(String status) {
+    if (status == null || status.isBlank()) {
+        return null;
+    }
+    String value = status.trim().toLowerCase().replaceAll("[\\s_-]+", "");
+    if (value.contains("present")) return "Present";
+    if (value.contains("absent")) return "Absent";
+    if (value.contains("late")) return "Late";
+    if (value.contains("weekoff") || value.contains("weekendoff")) return "Week Off";
+    if (value.contains("holiday")) return "Holiday";
+    if (value.contains("leave")) return "Leave";
+    return status.trim();
+}
+
+private String normalizeBranch(String branch) {
+    if (branch == null || branch.isBlank()) {
+        return null;
+    }
+    return branch.trim().toLowerCase();
+}
+
+private int compareRecordMapsNewestFirst(Map<String, Object> left, Map<String, Object> right) {
+    LocalDate leftDate = parseFlexibleDate(asText(left.get("date")));
+    LocalDate rightDate = parseFlexibleDate(asText(right.get("date")));
+    if (leftDate != null && rightDate != null && !leftDate.equals(rightDate)) {
+        return rightDate.compareTo(leftDate);
+    }
+    if (leftDate == null && rightDate != null) return 1;
+    if (leftDate != null) return -1;
+
+    LocalDateTime leftTime = left.get("timeIn") instanceof LocalDateTime time ? time : null;
+    LocalDateTime rightTime = right.get("timeIn") instanceof LocalDateTime time ? time : null;
+    if (leftTime != null && rightTime != null) {
+        return rightTime.compareTo(leftTime);
+    }
+    if (leftTime == null && rightTime != null) return 1;
+    if (leftTime != null) return -1;
+    Long leftId = asLong(left.get("id"));
+    Long rightId = asLong(right.get("id"));
+    if (leftId != null && rightId != null) {
+        return rightId.compareTo(leftId);
+    }
+    return 0;
+}
+
+private Long asLong(Object value) {
+    if (value instanceof Number number) {
+        return number.longValue();
+    }
+    String text = asText(value);
+    if (text == null) {
+        return null;
+    }
+    try {
+        return Long.parseLong(text);
+    } catch (NumberFormatException ex) {
+        return null;
+    }
+}
+
+private int asInt(Object value) {
+    if (value instanceof Number number) {
+        return number.intValue();
+    }
+    String text = asText(value);
+    if (text == null) {
+        return 0;
+    }
+    try {
+        return Integer.parseInt(text);
+    } catch (NumberFormatException ex) {
+        return 0;
+    }
+}
+
+private record DateRange(LocalDate start, LocalDate end) {
+}
+
 private boolean isRecordInMonth(AttendanceRecord record, int month, int year) {
     if (record == null) {
         return false;
@@ -623,6 +1040,36 @@ private boolean isRecordInMonth(AttendanceRecord record, int month, int year) {
         return false;
     }
     return date.getMonthValue() == month && date.getYear() == year;
+}
+
+private List<String> buildMonthDateCandidates(YearMonth yearMonth) {
+    List<String> dates = new ArrayList<>();
+    for (LocalDate cursor = yearMonth.atDay(1); !cursor.isAfter(yearMonth.atEndOfMonth()); cursor = cursor.plusDays(1)) {
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+        dates.add(cursor.format(DateTimeFormatter.ofPattern("dd-MM-yyyy")));
+    }
+    return dates;
+}
+
+private boolean shouldReplaceMonthlyRecord(Map<String, Object> existing, Map<String, Object> candidate) {
+    if (existing == null) {
+        return true;
+    }
+    boolean existingHasPunch = existing.get("timeIn") != null || existing.get("timeOut") != null;
+    boolean candidateHasPunch = candidate.get("timeIn") != null || candidate.get("timeOut") != null;
+    if (candidateHasPunch != existingHasPunch) {
+        return candidateHasPunch;
+    }
+    Long existingId = existing.get("id") instanceof Number number ? number.longValue() : null;
+    Long candidateId = candidate.get("id") instanceof Number number ? number.longValue() : null;
+    if (existingId == null) {
+        return candidateId != null;
+    }
+    if (candidateId == null) {
+        return false;
+    }
+    return candidateId > existingId;
 }
 
 private LocalDate parseFlexibleDate(String raw) {

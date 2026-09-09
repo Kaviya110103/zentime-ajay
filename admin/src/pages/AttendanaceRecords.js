@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { format, parseISO, isValid, parse } from "date-fns";
+import * as XLSX from "xlsx/dist/xlsx.mini.min";
 import {
   Box,
   Button,
@@ -23,13 +24,9 @@ import {
   Alert,
   Chip,
   Divider,
-  Snackbar,
-  useTheme,
-  useMediaQuery,
   AppBar,
   Toolbar,
   LinearProgress,
-  Badge,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -55,12 +52,7 @@ import { API_BASE_URL, fetchWithTimeout } from "../config/api";
 function AttendanceFilters() {
   const client = JSON.parse(localStorage.getItem("loggedInClient"));
   const clientId = client?.id;
-  const companyCode = String(client?.companyCode || "").trim().toLowerCase();
-  const USE_LOCAL_API = false;
-  const LOCAL_API_ORIGIN = API_BASE_URL;
-  const baseOrigin = USE_LOCAL_API
-    ? LOCAL_API_ORIGIN
-    : API_BASE_URL;
+  const baseOrigin = API_BASE_URL;
 
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -71,11 +63,11 @@ function AttendanceFilters() {
   const [absentCount, setAbsentCount] = useState(0);
   const [weekOffCount, setWeekOffCount] = useState(0);
   const [holidayCount, setHolidayCount] = useState(0);
+  const [lateCount, setLateCount] = useState(0);
   const [employeeSummaryModalOpen, setEmployeeSummaryModalOpen] = useState(false);
   const [todayStatus, setTodayStatus] = useState(null);
   const tableRef = useRef(null);
   const defaultLoadStartedRef = useRef(false);
-  const [holidayDateSet, setHolidayDateSet] = useState(new Set());
   const [employeeDirectory, setEmployeeDirectory] = useState([]);
   const [additionalWorkingByEmployee, setAdditionalWorkingByEmployee] = useState({});
   const [overtimeRequests, setOvertimeRequests] = useState([]);
@@ -235,17 +227,6 @@ function AttendanceFilters() {
     return parsed ? format(parsed, "yyyy-MM-dd'T'HH:mm") : "";
   };
 
-  const formatWorkingHours = (timeIn, timeOut) => {
-    const start = parseRecordDateTime(timeIn);
-    const end = parseRecordDateTime(timeOut);
-    if (!start || !end) return "-";
-    const diffMinutes = Math.floor((end - start) / 60000);
-    if (diffMinutes < 0) return "-";
-    const hours = Math.floor(diffMinutes / 60);
-    const minutes = diffMinutes % 60;
-    return `${hours}h ${minutes}m`;
-  };
-
   const formatDayName = (dateString) => {
     const recordDate = parseRecordDate(dateString);
     if (!recordDate) return "-";
@@ -258,48 +239,6 @@ function AttendanceFilters() {
     return format(parsed, "yyyy-MM-dd");
   };
 
-  const getAdditionalWorkingDayType = (dateValue) => {
-    if (!dateValue) return null;
-    const day = dateValue.getDay(); // 0 Sunday, 6 Saturday
-    if (day !== 0 && day !== 6) return null;
-
-    const firstOfMonth = new Date(dateValue.getFullYear(), dateValue.getMonth(), 1);
-    let count = 0;
-    for (let d = new Date(firstOfMonth); d <= dateValue; d.setDate(d.getDate() + 1)) {
-      if (d.getDay() === day) {
-        count += 1;
-      }
-    }
-    const isOdd = count % 2 === 1;
-    if (day === 6) {
-      return isOdd ? "ODD_SATURDAY" : "EVEN_SATURDAY";
-    }
-    return isOdd ? "ODD_SUNDAY" : "EVEN_SUNDAY";
-  };
-
-  const hasAdditionalWorkingDay = (employee, dateValue) => {
-    if (!employee || !dateValue) return false;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return false;
-    const list = getEmployeeAdditionalWorkingList(employee);
-    return Array.isArray(list)
-      ? list.some((item) => {
-          const itemType = String(item?.dayType || "").toUpperCase();
-          return itemType === type || itemType === getSameWeekdayFallbackType(type);
-        })
-      : false;
-  };
-
-  const getSameWeekdayFallbackType = (type) => {
-    const fallbackMap = {
-      ODD_SATURDAY: "EVEN_SATURDAY",
-      EVEN_SATURDAY: "ODD_SATURDAY",
-      ODD_SUNDAY: "EVEN_SUNDAY",
-      EVEN_SUNDAY: "ODD_SUNDAY",
-    };
-    return fallbackMap[type] || null;
-  };
-
   const getEmployeeAdditionalWorkingList = (employee) => {
     if (!employee) return [];
     const direct = employee.additionalWorkingDays || employee.additionalWorkingDay;
@@ -307,24 +246,6 @@ function AttendanceFilters() {
     const employeeId = employee.id ?? employee.employeeId;
     const cached = employeeId != null ? additionalWorkingByEmployee[String(employeeId)] : null;
     return Array.isArray(cached) ? cached : [];
-  };
-
-  const getAdditionalWorkingDayEntry = (employee, dateValue) => {
-    if (!employee || !dateValue) return null;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return null;
-    const list = getEmployeeAdditionalWorkingList(employee);
-    if (!Array.isArray(list)) return null;
-    const exact = list.find((item) => String(item?.dayType || "").toUpperCase() === type);
-    if (exact) return exact;
-    const fallbackType = getSameWeekdayFallbackType(type);
-    return list.find((item) => String(item?.dayType || "").toUpperCase() === fallbackType) || null;
-  };
-
-  const parseTimeToMinutes = (value) => {
-    const parsed = parseRecordDateTime(value);
-    if (!parsed) return null;
-    return parsed.getHours() * 60 + parsed.getMinutes();
   };
 
   const formatShiftRange = (startTime, endTime) => {
@@ -337,48 +258,11 @@ function AttendanceFilters() {
     return `${formatShiftTime(startTime)} - ${formatShiftTime(endTime)}`;
   };
 
-  const getShiftStartForRecord = (record) => {
-    if (record?.expectedShiftStart) {
-      return record.expectedShiftStart;
-    }
-    const employee = record?.employee;
-    if (!employee) return null;
-    const recordDate = parseRecordDate(record?.date);
-    const additionalEntry = recordDate
-      ? getAdditionalWorkingDayEntry(employee, recordDate)
-      : null;
-    if (additionalEntry?.timeIn) {
-      return additionalEntry.timeIn;
-    }
-    return employee.shiftStartTime || null;
-  };
-
-  const getShiftEndForRecord = (record) => {
-    if (record?.expectedShiftEnd) {
-      return record.expectedShiftEnd;
-    }
-    const employee = record?.employee;
-    if (!employee) return null;
-    const recordDate = parseRecordDate(record?.date);
-    const additionalEntry = recordDate
-      ? getAdditionalWorkingDayEntry(employee, recordDate)
-      : null;
-    if (additionalEntry?.timeOut) {
-      return additionalEntry.timeOut;
-    }
-    return employee.shiftEndTime || null;
-  };
-
   const getLateArrivalMinutes = (record) => {
     if (record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes))) {
       return Math.max(0, Number(record.lateMinutes));
     }
-    if (!record?.timeIn) return 0;
-    const expectedMinutes = parseTimeToMinutes(getShiftStartForRecord(record));
-    const clockInMinutes = parseTimeToMinutes(record.timeIn);
-    if (expectedMinutes == null || clockInMinutes == null) return 0;
-    const lateMinutes = clockInMinutes - expectedMinutes;
-    return lateMinutes > 0 ? lateMinutes : 0;
+    return 0;
   };
 
   const getLateArrivalDisplay = (record) => {
@@ -390,50 +274,10 @@ function AttendanceFilters() {
     if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
       return Math.max(0, Number(record.calculatedMissedMinutes));
     }
-    const status = getRecordStatusBucket(record);
-    if (status !== "Present" || !record?.timeIn || !record?.timeOut) {
-      return Number(record?.missedTimes || 0);
+    if (record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes))) {
+      return Math.max(0, getLateArrivalMinutes(record) + Number(record.earlyOutMinutes));
     }
-
-    const expectedStart = parseTimeToMinutes(getShiftStartForRecord(record));
-    const expectedEnd = parseTimeToMinutes(getShiftEndForRecord(record));
-    const actualStart = parseTimeToMinutes(record.timeIn);
-    const actualEnd = parseTimeToMinutes(record.timeOut);
-    if (
-      expectedStart == null ||
-      expectedEnd == null ||
-      actualStart == null ||
-      actualEnd == null
-    ) {
-      return Number(record?.missedTimes || 0);
-    }
-
-    const lateMinutes = Math.max(0, actualStart - expectedStart);
-    const earlyOutMinutes = Math.max(0, expectedEnd - actualEnd);
-    return lateMinutes + earlyOutMinutes;
-  };
-
-  const isWeekendOffPolicy = (employee) => {
-    const policyRaw = String(employee?.leavePolicyType || "").toLowerCase();
-    const weekOffRaw = String(employee?.weekOff || "").toLowerCase();
-    if (policyRaw.includes("weekend")) return true;
-    if (policyRaw.includes("saturday") && policyRaw.includes("sunday")) return true;
-    if (weekOffRaw.includes("saturday") && weekOffRaw.includes("sunday")) return true;
-    return false;
-  };
-
-  const isWeekOffDate = (dateValue, employee) => {
-    if (!dateValue || !employee) return false;
-    const dayName = format(dateValue, "EEEE").toLowerCase();
-
-    if (isWeekendOffPolicy(employee)) {
-      if (hasAdditionalWorkingDay(employee, dateValue)) return false;
-      return dayName === "saturday" || dayName === "sunday";
-    }
-
-    const weekOffDay = String(employee.weekOff || "").toLowerCase().trim();
-    if (!weekOffDay) return false;
-    return dayName === weekOffDay;
+    return Number(record?.missedTimes || 0);
   };
 
   const getDerivedStatus = (record) => {
@@ -441,53 +285,10 @@ function AttendanceFilters() {
     if (record.displayStatus) {
       return String(record.displayStatus);
     }
-    const rawStatus = String(record.attendanceStatus || "").trim();
-    const statusLower = rawStatus.toLowerCase();
-    const dayStatus = String(record.dayStatus || "").toLowerCase();
-
-    const recordDate = parseRecordDate(record.date);
-    const dateKey = recordDate ? format(recordDate, "yyyy-MM-dd") : null;
-    const hasPunch = Boolean(record?.timeIn || record?.timeOut);
-    const isMarkedPresent = statusLower.includes("present") || dayStatus.includes("present");
-
-    if (isMarkedPresent || hasPunch) {
-      return "Present";
+    if (record.countStatus) {
+      return String(record.countStatus);
     }
-
-    if (dateKey && holidayDateSet.has(dateKey)) {
-      return "Holiday";
-    }
-
-    if (recordDate && isWeekOffDate(recordDate, record.employee)) {
-      return "Week Off";
-    }
-
-    const isWeekend = recordDate
-      ? recordDate.getDay() === 0 || recordDate.getDay() === 6
-      : false;
-    const isScheduledWeekendWork =
-      isWeekend && recordDate
-        ? hasAdditionalWorkingDay(record.employee, recordDate)
-        : false;
-
-    // If backend marks weekend-working days as leave without punch, surface them as absent.
-    if (
-      isScheduledWeekendWork &&
-      !hasPunch &&
-      (statusLower.includes("leave") || (dayStatus.includes("leave") && !statusLower))
-    ) {
-      return "Absent";
-    }
-
-    if (statusLower.includes("leave")) {
-      return "Leave";
-    }
-
-    if (dayStatus.includes("leave") && !statusLower) {
-      return "Leave";
-    }
-
-    return rawStatus || "-";
+    return String(record.attendanceStatus || "-");
   };
 
   const normalizeAttendanceStatus = (status) => {
@@ -511,88 +312,13 @@ function AttendanceFilters() {
     return normalizeAttendanceStatus(getDerivedStatus(record));
   };
 
-  const applyStatusFilter = (items, activeFilters = filters) => {
-    const selectedStatus = normalizeAttendanceStatus(activeFilters.attendanceStatus);
-    if (!selectedStatus) return items;
-    return items.filter((record) => getRecordStatusBucket(record) === selectedStatus);
-  };
-
   const updateSummaryCounts = (items) => {
     setTotalRecords(items.length);
     setPresentCount(items.filter((record) => getRecordStatusBucket(record) === "Present").length);
     setAbsentCount(items.filter((record) => getRecordStatusBucket(record) === "Absent").length);
     setWeekOffCount(items.filter((record) => getRecordStatusBucket(record) === "Week Off").length);
     setHolidayCount(items.filter((record) => getRecordStatusBucket(record) === "Holiday").length);
-  };
-
-  const applyLocalFilters = (items, activeFilters = filters) => {
-    let filtered = [...items];
-
-    if (activeFilters.employeeId) {
-      const employeeId = String(activeFilters.employeeId).trim();
-      filtered = filtered.filter((record) => {
-        const candidates = [
-          record.employee?.id,
-          record.employeeId,
-          record.employee?.employeeId,
-          record.employee?.code,
-        ]
-          .filter(Boolean)
-          .map((value) => String(value));
-        return candidates.includes(employeeId);
-      });
-    }
-
-    if (activeFilters.branch) {
-      const selectedBranch = String(activeFilters.branch).trim().toLowerCase();
-      filtered = filtered.filter((record) => {
-        const branch = String(record?.employee?.branch || "").trim().toLowerCase();
-        return branch === selectedBranch;
-      });
-    }
-
-    if (activeFilters.month) {
-      const monthNumber = Number(activeFilters.month);
-      filtered = filtered.filter((record) => {
-        const recordDate = parseRecordDate(record.date);
-        return recordDate ? recordDate.getMonth() + 1 === monthNumber : false;
-      });
-    }
-
-    if (activeFilters.year) {
-      const yearNumber = Number(activeFilters.year);
-      filtered = filtered.filter((record) => {
-        const recordDate = parseRecordDate(record.date);
-        return recordDate ? recordDate.getFullYear() === yearNumber : false;
-      });
-    }
-
-    if (activeFilters.date) {
-      const targetDate = format(activeFilters.date, "yyyy-MM-dd");
-      filtered = filtered.filter((record) => {
-        const recordDate = parseRecordDate(record.date);
-        return recordDate ? format(recordDate, "yyyy-MM-dd") === targetDate : false;
-      });
-    }
-
-    if (activeFilters.startDate || activeFilters.endDate) {
-      const start = activeFilters.startDate
-        ? parseRecordDate(format(activeFilters.startDate, "yyyy-MM-dd"))
-        : null;
-      const end = activeFilters.endDate
-        ? parseRecordDate(format(activeFilters.endDate, "yyyy-MM-dd"))
-        : null;
-
-      filtered = filtered.filter((record) => {
-        const recordDate = parseRecordDate(record.date);
-        if (!recordDate) return false;
-        if (start && recordDate < start) return false;
-        if (end && recordDate > end) return false;
-        return true;
-      });
-    }
-
-    return filtered;
+    setLateCount(items.filter((record) => getRecordStatusBucket(record) === "Present" && getLateArrivalMinutes(record) > 0).length);
   };
 
   const sortRecords = (items) => {
@@ -614,41 +340,6 @@ function AttendanceFilters() {
       return timeB - timeA;
     });
   };
-
-  useEffect(() => {
-    if (!clientId) {
-      setHolidayDateSet(new Set());
-      return;
-    }
-
-    const fetchHolidays = async () => {
-      try {
-        const response = await fetchWithTimeout(withClientId(`${baseOrigin}/api/admin/holidays`));
-        if (!response.ok) {
-          setHolidayDateSet(new Set());
-          return;
-        }
-        const data = await response.json();
-        if (!Array.isArray(data)) {
-          setHolidayDateSet(new Set());
-          return;
-        }
-        const nextSet = new Set();
-        data.forEach((holiday) => {
-          const dateKey = buildDateKey(holiday?.holidayDate);
-          if (dateKey) {
-            nextSet.add(dateKey);
-          }
-        });
-        setHolidayDateSet(nextSet);
-      } catch (err) {
-        console.error("Error fetching holidays:", err);
-        setHolidayDateSet(new Set());
-      }
-    };
-
-    fetchHolidays();
-  }, [clientId, baseOrigin]);
 
   useEffect(() => {
     if (!clientId) {
@@ -912,23 +603,54 @@ function AttendanceFilters() {
   const additionalWorkingSummaryRows = useMemo(() => {
     if (!selectedEmployeeSummary) return [];
     const entries = getEmployeeAdditionalWorkingList(selectedEmployeeSummary);
+    const labelMap = {
+      ODD_SATURDAY: "Odd Saturday",
+      EVEN_SATURDAY: "Even Saturday",
+      ODD_SUNDAY: "Odd Sunday",
+      EVEN_SUNDAY: "Even Sunday",
+    };
+    const orderMap = {
+      ODD_SATURDAY: 1,
+      EVEN_SATURDAY: 2,
+      ODD_SUNDAY: 3,
+      EVEN_SUNDAY: 4,
+    };
     const sorted = [...entries].sort((a, b) =>
-      String(a?.dayType || "").localeCompare(String(b?.dayType || ""))
+      (orderMap[String(a?.dayType || "").toUpperCase()] || 99) -
+      (orderMap[String(b?.dayType || "").toUpperCase()] || 99)
     );
     return sorted.map((entry) => {
       const key = String(entry?.dayType || "").toUpperCase();
-      const labelMap = {
-        ODD_SATURDAY: "Odd Saturday",
-        EVEN_SATURDAY: "Even Saturday",
-        ODD_SUNDAY: "Odd Sunday",
-        EVEN_SUNDAY: "Even Sunday",
-      };
       return {
+        dayType: key,
         label: labelMap[key] || key,
         value: formatShiftRange(entry?.timeIn, entry?.timeOut),
       };
     });
   }, [selectedEmployeeSummary, additionalWorkingByEmployee]);
+
+  const rotationalWeekOffSummaryRows = useMemo(() => {
+    const configured = new Set(additionalWorkingSummaryRows.map((entry) => entry.dayType));
+    const pairs = [
+      ["ODD_SATURDAY", "EVEN_SATURDAY"],
+      ["ODD_SUNDAY", "EVEN_SUNDAY"],
+    ];
+    const labelMap = {
+      ODD_SATURDAY: "Odd Saturday",
+      EVEN_SATURDAY: "Even Saturday",
+      ODD_SUNDAY: "Odd Sunday",
+      EVEN_SUNDAY: "Even Sunday",
+    };
+
+    return pairs
+      .map(([oddType, evenType]) => {
+        const hasOdd = configured.has(oddType);
+        const hasEven = configured.has(evenType);
+        if (hasOdd === hasEven) return null;
+        return hasOdd ? labelMap[evenType] : labelMap[oddType];
+      })
+      .filter(Boolean);
+  }, [additionalWorkingSummaryRows]);
 
   const enrichRecordsWithEmployeeDetails = (items) => {
     if (!Array.isArray(items) || items.length === 0) return [];
@@ -977,128 +699,20 @@ function AttendanceFilters() {
     });
   };
 
-  const resolveEmployeeForFilter = (items, activeFilters = filters) => {
-    const raw = String(activeFilters.employeeId || "").trim();
-    if (!raw) return null;
-    const lowered = raw.toLowerCase();
-    const byIndex =
-      employeeDirectoryIndex.byId.get(raw) ||
-      employeeDirectoryIndex.byEmployeeId.get(raw) ||
-      employeeDirectoryIndex.byCode.get(lowered);
-    if (byIndex) return byIndex;
-
-    const fromItems = (items || []).find((record) => {
-      const employee = record?.employee;
-      if (!employee) return false;
-      const candidates = [
-        employee.id,
-        employee.employeeId,
-        employee.employeeCode,
-        employee.code,
-      ]
-        .filter((value) => value != null)
-        .map((value) => String(value).toLowerCase());
-      return candidates.includes(lowered);
-    });
-    return fromItems?.employee || null;
-  };
-
-  const appendMissingDateRows = (items, activeFilters = filters) => {
-    if (!activeFilters.employeeId) {
-      return items;
-    }
-
-    const employee = resolveEmployeeForFilter(items, activeFilters);
-    if (!employee) {
-      return items;
-    }
-
-    const existingByDateKey = new Set(
-      items
-        .map((record) => {
-          const date = parseRecordDate(record?.date);
-          return date ? format(date, "yyyy-MM-dd") : null;
-        })
-        .filter(Boolean)
-    );
-
-    const monthNumber = Number(activeFilters.month);
-    const yearNumber = Number(activeFilters.year);
-    const hasExplicitMonthYear =
-      Number.isInteger(monthNumber) &&
-      monthNumber >= 1 &&
-      monthNumber <= 12 &&
-      Number.isInteger(yearNumber) &&
-      yearNumber >= 1900;
-
-    let startDate = null;
-    let endDate = null;
-
-    if (hasExplicitMonthYear) {
-      startDate = new Date(yearNumber, monthNumber - 1, 1);
-      endDate = new Date(yearNumber, monthNumber, 0);
-    } else {
-      const availableDates = items
-        .map((record) => parseRecordDate(record?.date))
-        .filter(Boolean)
-        .sort((a, b) => a - b);
-      if (availableDates.length < 2) {
-        return items;
-      }
-      startDate = availableDates[0];
-      endDate = availableDates[availableDates.length - 1];
-    }
-
-    const syntheticRows = [];
-    for (
-      let currentDate = new Date(startDate);
-      currentDate <= endDate;
-      currentDate.setDate(currentDate.getDate() + 1)
-    ) {
-      const dateKey = format(currentDate, "yyyy-MM-dd");
-      if (existingByDateKey.has(dateKey)) {
-        continue;
-      }
-      syntheticRows.push({
-        id: `virtual-${employee?.id || "emp"}-${dateKey}`,
-        date: format(currentDate, "dd/MM/yyyy"),
-        attendanceStatus: "Absent",
-        dayStatus: "",
-        timeIn: null,
-        timeOut: null,
-        missedTimes: 0,
-        location: null,
-        employee,
-        __synthetic: true,
-      });
-    }
-
-    if (syntheticRows.length === 0) {
-      return items;
-    }
-    return sortRecords([...items, ...syntheticRows]);
-  };
-
   // Build URL based on filter type
   const buildUrl = (activeFilters = filters) => {
-    const attendanceBase = `${baseOrigin}/api/attendance-records`;
-    const {
-      employeeId,
-      date,
-    } = activeFilters;
-
-    const formattedDate = date ? format(date, "dd/MM/yyyy") : "";
-
-    if (employeeId && formattedDate) {
-      return withClientId(`${attendanceBase}/by-employee-date?employeeId=${encodeURIComponent(employeeId)}&date=${formattedDate}`);
-    }
-    if (employeeId) {
-      return withClientId(`${attendanceBase}/by-employee?employeeId=${encodeURIComponent(employeeId)}&limit=200`);
-    }
-    if (formattedDate) {
-      return withClientId(`${attendanceBase}/by-date?date=${formattedDate}&limit=200`);
-    }
-    return withClientId(`${attendanceBase}/all?limit=200`);
+    const params = new URLSearchParams();
+    if (clientId) params.set("clientId", clientId);
+    if (activeFilters.employeeId) params.set("employeeId", activeFilters.employeeId);
+    if (activeFilters.branch) params.set("branch", activeFilters.branch);
+    if (activeFilters.date) params.set("date", format(activeFilters.date, "dd/MM/yyyy"));
+    if (activeFilters.startDate) params.set("startDate", format(activeFilters.startDate, "dd/MM/yyyy"));
+    if (activeFilters.endDate) params.set("endDate", format(activeFilters.endDate, "dd/MM/yyyy"));
+    if (activeFilters.month) params.set("month", activeFilters.month);
+    if (activeFilters.year) params.set("year", activeFilters.year);
+    if (activeFilters.attendanceStatus) params.set("status", activeFilters.attendanceStatus);
+    params.set("limit", "5000");
+    return `${baseOrigin}/api/attendance-records/search?${params.toString()}`;
   };
 
   const fetchAttendanceRecords = async (activeFilters = filters, options = {}) => {
@@ -1114,30 +728,7 @@ function AttendanceFilters() {
       const url = buildUrl(activeFilters);
       console.log("Fetching from URL:", url);
 
-      const fetchWithFallback = async (primaryUrl) => {
-        const response = await fetchWithTimeout(primaryUrl);
-        if (response.ok || response.status === 404) return response;
-
-        const fallbackUrls = [
-          withClientId(`${baseOrigin}/api/attendance-records/all?limit=200`),
-          withClientId(`${baseOrigin}/api/attendance/all?limit=200`),
-        ];
-
-        for (const fallbackUrl of fallbackUrls) {
-          try {
-            const fallbackResponse = await fetchWithTimeout(fallbackUrl);
-            if (fallbackResponse.ok || fallbackResponse.status === 404) {
-              return fallbackResponse;
-            }
-          } catch (fallbackError) {
-            console.error("Fallback fetch error:", fallbackError);
-          }
-        }
-
-        return response;
-      };
-
-      const response = await fetchWithFallback(url);
+      const response = await fetchWithTimeout(url);
 
       if (response.status === 404) {
         setRecords([]);
@@ -1167,11 +758,8 @@ function AttendanceFilters() {
       const arr = normalizeRecords(data);
       const filteredRecords = arr.filter((item) => item != null);
 
-      const locallyFiltered = applyLocalFilters(filteredRecords, activeFilters);
-      const sortedRecords = sortRecords(locallyFiltered);
-      const enrichedRecords = enrichRecordsWithEmployeeDetails(sortedRecords);
-      const recordsWithNonWorkingDays = appendMissingDateRows(enrichedRecords, activeFilters);
-      const statusFilteredRecords = applyStatusFilter(recordsWithNonWorkingDays, activeFilters);
+      const sortedRecords = sortRecords(filteredRecords);
+      const statusFilteredRecords = enrichRecordsWithEmployeeDetails(sortedRecords);
       setRecords(statusFilteredRecords);
       updateSummaryCounts(statusFilteredRecords);
 
@@ -1229,53 +817,110 @@ function AttendanceFilters() {
     const headers = [
       "Date",
       "Day",
-      "Employee",
+      "Employee Name",
+      "Employee Code",
+      "Branch",
       "Status",
       "Time In",
       "Time Out",
+      "Worked Minutes",
       "Working Hours",
-      "Late Arrival (min)",
-      "Missed Times (min)",
+      "Late Minutes",
+      "Early Out Minutes",
+      "Missed Minutes",
+      "Shift Start",
+      "Shift End",
+      "Expected Minutes",
       "Location",
+      "Week Off",
+      "Holiday",
+      "Additional Working Day",
     ];
 
+    const parseBusinessDateForExcel = (value) => {
+      if (!value) return "";
+      const text = String(value).trim();
+
+      let match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        const [, year, month, day] = match;
+        return new Date(Number(year), Number(month) - 1, Number(day));
+      }
+
+      match = text.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
+      if (match) {
+        const [, day, month, year] = match;
+        return new Date(Number(year), Number(month) - 1, Number(day));
+      }
+
+      const parsed = parseRecordDate(text);
+      if (!parsed) return text;
+      return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+    };
+
     const rows = records.map((record) => [
-      safeFormatDate(record.date, "dd MMM yyyy"),
+      parseBusinessDateForExcel(record.date),
       formatDayName(record.date),
       record.employee
         ? `${record.employee.firstName} ${record.employee.lastName || ""}`
         : "-",
+      record.employee?.employeeCode || "-",
+      record.employee?.branch || "-",
       getDerivedStatus(record),
       formatTime(record.timeIn),
       formatTime(record.timeOut),
-      formatWorkingHours(record.timeIn, record.timeOut),
-      getLateArrivalDisplay(record),
+      record.workedMinutes ?? "",
+      formatWorkingHoursFromMinutes(record.workedMinutes),
+      getLateArrivalMinutes(record),
+      record.earlyOutMinutes ?? 0,
       getComputedMissedMinutes(record),
+      record.expectedShiftStart || "",
+      record.expectedShiftEnd || "",
+      record.expectedMinutes ?? "",
       record.location || "-",
+      record.weekOff ? "Yes" : "No",
+      record.holiday ? "Yes" : "No",
+      record.additionalWorkingDay ? "Yes" : "No",
     ]);
 
-    const escapeValue = (value) => {
-      const str = String(value ?? "");
-      if (str.includes('"') || str.includes(",") || str.includes("\n")) {
-        return `"${str.replace(/"/g, '""')}"`;
+    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    worksheet["!cols"] = [
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 25 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 16 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 16 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 16 },
+      { wch: 25 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 22 },
+    ];
+
+    rows.forEach((row, index) => {
+      if (row[0] instanceof Date) {
+        const cellAddress = XLSX.utils.encode_cell({ r: index + 1, c: 0 });
+        worksheet[cellAddress].t = "d";
+        worksheet[cellAddress].z = "dd-mmm-yyyy";
       }
-      return str;
-    };
+    });
 
-    const csv = [
-      headers.map(escapeValue).join(","),
-      ...rows.map((row) => row.map(escapeValue).join(",")),
-    ].join("\n");
-
-    const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `attendance_records_${format(new Date(), "yyyyMMdd_HHmmss")}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance Records");
+    XLSX.writeFile(workbook, `attendance_records_${format(new Date(), "yyyyMMdd_HHmmss")}.xlsx`, {
+      bookType: "xlsx",
+      compression: true,
+    });
   };
 
   const findTodayRecord = (items) => {
@@ -1561,7 +1206,7 @@ function AttendanceFilters() {
         </head>
         <body>
           <h1>Attendance Records</h1>
-          <div class="summary">Total Records: ${totalRecords} | Present: ${presentCount} | Absent: ${absentCount}</div>
+          <div class="summary">Total Records: ${totalRecords} | Present: ${presentCount} | Absent: ${absentCount} | Week Off: ${weekOffCount} | Holiday: ${holidayCount} | Late: ${lateCount}</div>
           <div class="print-date">Generated on: ${format(
             new Date(),
             "dd MMM yyyy HH:mm"
@@ -1577,7 +1222,10 @@ function AttendanceFilters() {
                 <th>Time Out</th>
                 <th>Working Hours</th>
                 <th>Late Arrival (min)</th>
-                <th>Missed Times (min)</th>
+                <th>Early Out (min)</th>
+                <th>Missed Minutes</th>
+                <th>Shift Start</th>
+                <th>Shift End</th>
                 <th>Location</th>
               </tr>
             </thead>
@@ -1598,9 +1246,12 @@ function AttendanceFilters() {
                   <td>${getDerivedStatus(record)}</td>
                   <td>${formatTime(record.timeIn)}</td>
                   <td>${formatTime(record.timeOut)}</td>
-                  <td>${formatWorkingHours(record.timeIn, record.timeOut)}</td>
+                  <td>${formatWorkingHoursFromMinutes(record.workedMinutes)}</td>
                   <td>${getLateArrivalDisplay(record)}</td>
+                  <td>${record.earlyOutMinutes ?? 0}</td>
                   <td>${getComputedMissedMinutes(record)}</td>
+                  <td>${record.expectedShiftStart || "-"}</td>
+                  <td>${record.expectedShiftEnd || "-"}</td>
                   <td>${record.location || "-"}</td>
                 </tr>
               `
@@ -1652,11 +1303,11 @@ function AttendanceFilters() {
     ];
 
     if (additionalWorkingSummaryRows.length > 0) {
-      additionalWorkingSummaryRows.forEach((entry) => {
-        rows.push({
-          label: entry.label,
-          value: entry.value,
-        });
+      rows.push({
+        label: "Additional Working Day",
+        value: additionalWorkingSummaryRows
+          .map((entry) => `${entry.label} - ${entry.value}`)
+          .join(", "),
       });
     } else {
       rows.push({
@@ -1664,9 +1315,15 @@ function AttendanceFilters() {
         value: "Not configured",
       });
     }
+    if (rotationalWeekOffSummaryRows.length > 0) {
+      rows.push({
+        label: "Rotational Week Off",
+        value: rotationalWeekOffSummaryRows.join(", "),
+      });
+    }
 
     return rows;
-  }, [selectedEmployeeSummary, additionalWorkingSummaryRows]);
+  }, [selectedEmployeeSummary, additionalWorkingSummaryRows, rotationalWeekOffSummaryRows]);
 
   const formatTime = (timeString) => {
     if (!timeString) return "-";
@@ -1681,6 +1338,20 @@ function AttendanceFilters() {
     } catch {
       return timeString;
     }
+  };
+
+  const formatBusinessDate = (dateString) => {
+    if (!dateString) return "";
+    const parsed = parseRecordDate(dateString);
+    return parsed ? format(parsed, "dd/MM/yyyy") : String(dateString);
+  };
+
+  const formatWorkingHoursFromMinutes = (minutes) => {
+    const totalMinutes = Number(minutes);
+    if (!Number.isFinite(totalMinutes) || totalMinutes < 0) return "-";
+    const hours = Math.floor(totalMinutes / 60);
+    const remainingMinutes = Math.round(totalMinutes % 60);
+    return `${hours}h ${remainingMinutes}m`;
   };
 
   const formatDateTime = (value) => {
@@ -1891,23 +1562,22 @@ function AttendanceFilters() {
                     <DatePicker
                       value={filters.date}
                       onChange={(date) => handleDateChange(date, 'date')}
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          fullWidth
-                          placeholder="Select Date"
-                          size="small"
-                          sx={filterInputSx}
-                          InputProps={{
-                            ...params.InputProps,
+                      format="dd/MM/yyyy"
+                      slotProps={{
+                        textField: {
+                          fullWidth: true,
+                          placeholder: "Select Date",
+                          size: "small",
+                          sx: filterInputSx,
+                          InputProps: {
                             startAdornment: (
                               <InputAdornment position="start">
                                 <CalendarMonthIcon sx={fieldIconSx} />
                               </InputAdornment>
                             ),
-                          }}
-                        />
-                      )}
+                          },
+                        },
+                      }}
                     />
                   </LocalizationProvider>
                 </Box>
@@ -1919,24 +1589,22 @@ function AttendanceFilters() {
                       views={["year", "month"]}
                       value={selectedMonthYear}
                       onChange={handleMonthYearChange}
-                      inputFormat="MMMM yyyy"
-                      renderInput={(params) => (
-                        <TextField
-                          {...params}
-                          fullWidth
-                          placeholder="Select Month & Year"
-                          size="small"
-                          sx={filterInputSx}
-                          InputProps={{
-                            ...params.InputProps,
+                      format="MMMM yyyy"
+                      slotProps={{
+                        textField: {
+                          fullWidth: true,
+                          placeholder: "Select Month & Year",
+                          size: "small",
+                          sx: filterInputSx,
+                          InputProps: {
                             startAdornment: (
                               <InputAdornment position="start">
                                 <CalendarMonthIcon sx={fieldIconSx} />
                               </InputAdornment>
                             ),
-                          }}
-                        />
-                      )}
+                          },
+                        },
+                      }}
                     />
                   </LocalizationProvider>
                 </Box>
@@ -2301,7 +1969,7 @@ function AttendanceFilters() {
                         </TableCell>
                         <TableCell>{formatTime(record.timeIn)}</TableCell>
                         <TableCell>{formatTime(record.timeOut)}</TableCell>
-                        <TableCell>{formatWorkingHours(record.timeIn, record.timeOut)}</TableCell>
+                        <TableCell>{formatWorkingHoursFromMinutes(record.workedMinutes)}</TableCell>
                         <TableCell>
                           {lateArrivalMinutes > 0 ? (
                             <Chip

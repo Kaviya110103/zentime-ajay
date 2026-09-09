@@ -2,10 +2,13 @@
 **/node_modules/
 **/target/
 **/build/
+**/builds/
 **/dist/
+**/dist-test/
 **/.expo/
 **/.gradle/
 **/coverage/
+**/eas-archive/
 
 # Local configuration and credentials
 **/.env
@@ -25,6 +28,7 @@
 **/*.war
 **/*.apk
 **/*.aab
+**/production-deploy/
 
 # IDE and OS files
 **/.idea/

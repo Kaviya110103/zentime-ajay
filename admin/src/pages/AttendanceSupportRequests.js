@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   Box,
@@ -45,6 +45,7 @@ export default function AttendanceSupportRequests() {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [selectedBranch, setSelectedBranch] = useState("");
+  const [selectedEmployee, setSelectedEmployee] = useState("");
 
   const buildParams = (requestType = activeTab) => {
     const params = { clientId: client?.id, requestType };
@@ -57,6 +58,52 @@ export default function AttendanceSupportRequests() {
     }
     return params;
   };
+
+  const getEmployeeDisplayName = (request) => {
+    const name = String(request?.employeeName || "").trim();
+    if (name) return name;
+    const firstName = String(request?.employee?.firstName || "").trim();
+    const lastName = String(request?.employee?.lastName || "").trim();
+    return `${firstName} ${lastName}`.trim() || "Unknown";
+  };
+
+  const getEmployeeIdentifier = (request) => {
+    const value =
+      request?.employeeId ??
+      request?.employee?.employeeId ??
+      request?.employee?.id;
+    return value == null ? "" : String(value);
+  };
+
+  const employeeOptions = useMemo(() => {
+    const selectedBranchKey = normalize(selectedBranch);
+    const unique = new Map();
+    requests.forEach((request) => {
+      if (selectedBranchKey && normalize(request?.branch) !== selectedBranchKey) {
+        return;
+      }
+      const employeeId = getEmployeeIdentifier(request);
+      if (!employeeId || unique.has(employeeId)) {
+        return;
+      }
+      const employeeName = getEmployeeDisplayName(request);
+      unique.set(employeeId, {
+        value: employeeId,
+        label: `${employeeName} (ID: ${employeeId})`,
+      });
+    });
+    return Array.from(unique.values()).sort((left, right) =>
+      left.label.localeCompare(right.label)
+    );
+  }, [requests, selectedBranch]);
+
+  const filteredRequests = useMemo(() => {
+    const selectedEmployeeId = String(selectedEmployee || "").trim();
+    if (!selectedEmployeeId) {
+      return requests;
+    }
+    return requests.filter((request) => getEmployeeIdentifier(request) === selectedEmployeeId);
+  }, [requests, selectedEmployee]);
 
   const fetchRequests = async (requestType = activeTab) => {
     try {
@@ -78,6 +125,11 @@ export default function AttendanceSupportRequests() {
     fetchRequests(activeTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client?.id, activeTab, selectedMonth, selectedBranch]);
+
+  const handleBranchChange = (value) => {
+    setSelectedBranch(value);
+    setSelectedEmployee("");
+  };
 
   const updateStatus = async (requestId, action) => {
     try {
@@ -136,12 +188,12 @@ export default function AttendanceSupportRequests() {
         </TableRow>
       </TableHead>
       <TableBody>
-        {requests.length === 0 ? (
+        {filteredRequests.length === 0 ? (
           <TableRow>
             <TableCell colSpan={8} align="center">No attendance support requests found.</TableCell>
           </TableRow>
         ) : (
-          requests.map((request) => {
+          filteredRequests.map((request) => {
             const isPending = normalize(request.status) === "pending";
             return (
               <TableRow key={request.id}>
@@ -189,12 +241,12 @@ export default function AttendanceSupportRequests() {
         </TableRow>
       </TableHead>
       <TableBody>
-        {requests.length === 0 ? (
+        {filteredRequests.length === 0 ? (
           <TableRow>
             <TableCell colSpan={6} align="center">No general support requests found.</TableCell>
           </TableRow>
         ) : (
-          requests.map((request) => {
+          filteredRequests.map((request) => {
             const canUpdate = !["resolved", "closed"].includes(normalize(request.status));
             return (
               <TableRow key={request.id}>
@@ -249,8 +301,11 @@ export default function AttendanceSupportRequests() {
         clientId={client?.id}
         selectedMonth={selectedMonth}
         selectedBranch={selectedBranch}
+        selectedEmployee={selectedEmployee}
+        employeeOptions={employeeOptions}
         onMonthChange={(value) => setSelectedMonth(value || new Date())}
-        onBranchChange={setSelectedBranch}
+        onBranchChange={handleBranchChange}
+        onEmployeeChange={setSelectedEmployee}
         onRefresh={() => {
           setRefreshing(true);
           fetchRequests(activeTab);

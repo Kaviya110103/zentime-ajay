@@ -9,8 +9,11 @@ import com.example.demo.repo.AttendanceSupportRequestRepository;
 import com.example.demo.repo.EmployeeRepository;
 import com.example.demo.service.RequestFilterService;
 import com.example.demo.service.SchemaMaintenanceService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -23,6 +26,7 @@ import java.util.*;
 @RequestMapping("/api/attendance-support")
 @CrossOrigin(origins = "*")
 public class AttendanceSupportRequestController {
+    private static final Logger LOGGER = LoggerFactory.getLogger(AttendanceSupportRequestController.class);
     private final AttendanceSupportRequestRepository supportRepository;
     private final AttendanceRecordRepository attendanceRecordRepository;
     private final EmployeeRepository employeeRepository;
@@ -117,46 +121,108 @@ public class AttendanceSupportRequestController {
     }
 
     @PostMapping("/{requestId}/approve")
+    @Transactional
     public ResponseEntity<?> approve(
             @PathVariable Long requestId,
+            @RequestParam(required = false) Long clientId,
             @RequestBody(required = false) ApprovalRequest body) {
-        schemaMaintenanceService.ensureEmployeeSchema();
-        Optional<AttendanceSupportRequest> optional = supportRepository.findById(requestId);
-        if (optional.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance support request not found.");
-        }
+        LOGGER.info("Attendance support approval started requestId={} clientId={}", requestId, clientId);
+        Long employeeIdForLog = null;
+        LocalDate attendanceDateForLog = null;
+        AttendanceSupportStatus statusForLog = null;
+        try {
+            schemaMaintenanceService.ensureEmployeeSchema();
+            Optional<AttendanceSupportRequest> optional = supportRepository.findById(requestId);
+            if (optional.isEmpty()) {
+                LOGGER.warn("Attendance support approval request not found requestId={} clientId={}", requestId, clientId);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance support request not found.");
+            }
 
-        AttendanceSupportRequest request = optional.get();
-        if (!TYPE_ATTENDANCE.equals(normalizeRequestType(request.getRequestType()))) {
-            return ResponseEntity.badRequest().body("Only attendance support requests can be approved.");
-        }
-        if (request.getAttendanceDate() == null || request.getAttendanceDate().isAfter(LocalDate.now())) {
-            return ResponseEntity.badRequest().body("Only current or past attendance dates can be approved.");
-        }
-        if (request.getTimeIn() == null || request.getTimeOut() == null) {
-            return ResponseEntity.badRequest().body("Time in and time out are required before approval.");
-        }
-        Long employeeId = request.getEmployee() == null ? null : request.getEmployee().getId();
-        if (employeeId == null) {
-            return ResponseEntity.badRequest().body("Employee not found for support request.");
-        }
-        if (supportRepository.existsByEmployeeIdAndAttendanceDateAndStatusAndIdNot(
-                employeeId,
-                request.getAttendanceDate(),
-                AttendanceSupportStatus.APPROVED,
-                request.getId())) {
-            return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body("Approved attendance support already exists for this employee and date.");
-        }
+            AttendanceSupportRequest request = optional.get();
+            Long employeeId = request.getEmployee() == null ? null : request.getEmployee().getId();
+            employeeIdForLog = employeeId;
+            attendanceDateForLog = request.getAttendanceDate();
+            statusForLog = request.getStatus();
+            LOGGER.info(
+                    "Attendance support approval loaded requestId={} clientId={} employeeId={} date={} status={}",
+                    requestId,
+                    clientId,
+                    employeeId,
+                    request.getAttendanceDate());
+            if (!TYPE_ATTENDANCE.equals(normalizeRequestType(request.getRequestType()))) {
+                LOGGER.warn(
+                        "Attendance support approval rejected non-attendance requestId={} clientId={} employeeId={} requestType={}",
+                        requestId,
+                        clientId,
+                        employeeId,
+                        request.getRequestType());
+                return ResponseEntity.badRequest().body("Only attendance support requests can be approved.");
+            }
+            if (request.getAttendanceDate() == null || request.getAttendanceDate().isAfter(LocalDate.now())) {
+                LOGGER.warn(
+                        "Attendance support approval rejected invalid date requestId={} clientId={} employeeId={} date={}",
+                        requestId,
+                        clientId,
+                        employeeId,
+                        request.getAttendanceDate());
+                return ResponseEntity.badRequest().body("Only current or past attendance dates can be approved.");
+            }
+            if (request.getTimeIn() == null || request.getTimeOut() == null) {
+                LOGGER.warn(
+                        "Attendance support approval rejected missing times requestId={} clientId={} employeeId={} date={}",
+                        requestId,
+                        clientId,
+                        employeeId,
+                        request.getAttendanceDate());
+                return ResponseEntity.badRequest().body("Time in and time out are required before approval.");
+            }
+            if (employeeId == null) {
+                LOGGER.warn("Attendance support approval rejected missing employee requestId={} clientId={}", requestId, clientId);
+                return ResponseEntity.badRequest().body("Employee not found for support request.");
+            }
+            if (supportRepository.existsByEmployeeIdAndAttendanceDateAndStatusAndIdNot(
+                    employeeId,
+                    request.getAttendanceDate(),
+                    AttendanceSupportStatus.APPROVED,
+                    request.getId())) {
+                LOGGER.warn(
+                        "Attendance support approval duplicate requestId={} clientId={} employeeId={} date={}",
+                        requestId,
+                        clientId,
+                        employeeId,
+                        request.getAttendanceDate());
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body("Approved attendance support already exists for this employee and date.");
+            }
 
-        request.setStatus(AttendanceSupportStatus.APPROVED);
-        request.setApprovedBy(body == null || body.approvedBy == null ? null : body.approvedBy.trim());
-        request.setApprovedAt(LocalDateTime.now());
-        if (body != null && body.approvedMinutes != null) {
-            request.setApprovedMinutes(Math.max(0, body.approvedMinutes));
+            request.setStatus(AttendanceSupportStatus.APPROVED);
+            statusForLog = request.getStatus();
+            request.setApprovedBy(body == null || body.approvedBy == null ? null : body.approvedBy.trim());
+            request.setApprovedAt(LocalDateTime.now());
+            if (body != null && body.approvedMinutes != null) {
+                request.setApprovedMinutes(Math.max(0, body.approvedMinutes));
+            }
+            upsertAttendanceRecord(request, clientId);
+            AttendanceSupportRequest saved = supportRepository.save(request);
+            LOGGER.info(
+                    "Attendance support approval completed requestId={} clientId={} employeeId={} date={} status={}",
+                    requestId,
+                    clientId,
+                    employeeId,
+                    saved.getAttendanceDate(),
+                    saved.getStatus());
+            return ResponseEntity.ok(toResponse(saved));
+        } catch (RuntimeException ex) {
+            LOGGER.error(
+                    "Attendance support approval failed requestId={} clientId={} employeeId={} date={} status={}",
+                    requestId,
+                    clientId,
+                    employeeIdForLog,
+                    attendanceDateForLog,
+                    statusForLog,
+                    ex);
+            throw ex;
         }
-        upsertAttendanceRecord(request);
-        return ResponseEntity.ok(toResponse(supportRepository.save(request)));
     }
 
     @PostMapping("/{requestId}/reject")
@@ -202,11 +268,19 @@ public class AttendanceSupportRequestController {
         return ResponseEntity.ok(toResponse(supportRepository.save(request)));
     }
 
-    private void upsertAttendanceRecord(AttendanceSupportRequest request) {
+    private void upsertAttendanceRecord(AttendanceSupportRequest request, Long clientId) {
         Employee employee = request.getEmployee();
         String date = request.getAttendanceDate().format(ATTENDANCE_DATE_FORMATTER);
         List<AttendanceRecord> existingRecords = attendanceRecordRepository.findByEmployeeIdAndDate(employee.getId(), date);
         AttendanceRecord record = existingRecords.isEmpty() ? new AttendanceRecord() : existingRecords.get(0);
+        LOGGER.info(
+                "Attendance support approval attendance upsert requestId={} clientId={} employeeId={} date={} existingRecords={} attendanceRecordId={}",
+                request.getId(),
+                clientId,
+                employee.getId(),
+                request.getAttendanceDate(),
+                existingRecords.size(),
+                record.getId());
         record.setEmployee(employee);
         record.setDate(date);
         record.setTimeIn(LocalDateTime.of(request.getAttendanceDate(), request.getTimeIn()));
@@ -218,7 +292,14 @@ public class AttendanceSupportRequestController {
             record.setLocation("Attendance Support");
         }
         updateDerivedAttendanceHours(record);
-        attendanceRecordRepository.save(record);
+        AttendanceRecord saved = attendanceRecordRepository.save(record);
+        LOGGER.info(
+                "Attendance support approval attendance saved requestId={} clientId={} employeeId={} date={} attendanceRecordId={}",
+                request.getId(),
+                clientId,
+                employee.getId(),
+                request.getAttendanceDate(),
+                saved.getId());
     }
 
     private void updateDerivedAttendanceHours(AttendanceRecord record) {

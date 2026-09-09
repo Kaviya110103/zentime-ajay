@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 import com.example.demo.MODELS.Announcement;
 import com.example.demo.MODELS.Employee;
 import com.example.demo.MODELS.EmployeePushToken;
+import com.example.demo.MODELS.Holiday;
 import com.example.demo.MODELS.LeavePermission;
 import com.example.demo.repo.EmployeePushTokenRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -71,6 +73,34 @@ public class PushNotificationService {
                 "announcementId", announcement.getId()
         );
         sendToTokens(tokenRepository.findAllTokens(), title, body, data);
+    }
+
+    public void notifyHolidayCreated(Holiday holiday) {
+        if (holiday == null || holiday.getClientId() == null) return;
+        String holidayName = holiday.getHolidayName() == null || holiday.getHolidayName().isBlank()
+                ? "Holiday"
+                : holiday.getHolidayName().trim();
+        String holidayDate = holiday.getHolidayDate() == null
+                ? ""
+                : holiday.getHolidayDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        String title = "Holiday Announced";
+        String body = holidayDate.isBlank()
+                ? "Holiday announced: " + holidayName
+                : "Holiday announced: " + holidayName + " - " + holidayDate;
+        Map<String, Object> data = Map.of(
+                "type", "holiday",
+                "holidayId", holiday.getId(),
+                "clientId", holiday.getClientId(),
+                "holidayDate", holiday.getHolidayDate() == null ? "" : holiday.getHolidayDate().toString(),
+                "branchScope", holiday.getBranchScope() == null ? "ALL" : holiday.getBranchScope()
+        );
+        String branchScope = normalizeBranchScope(holiday.getBranchScope());
+        List<String> tokens = "ALL".equals(branchScope)
+                ? tokenRepository.findTokensByEmployeeClientId(holiday.getClientId())
+                : tokenRepository.findTokensByEmployeeClientIdAndBranch(
+                        holiday.getClientId(),
+                        branchScope.toLowerCase(Locale.ROOT));
+        sendToTokens(tokens, title, body, data);
     }
 
     public void notifyLeaveStatus(LeavePermission leave) {
@@ -178,5 +208,13 @@ public class PushNotificationService {
         if (token == null) return false;
         if (!token.endsWith("]")) return false;
         return token.startsWith("ExpoPushToken[") || token.startsWith("ExponentPushToken[");
+    }
+
+    private String normalizeBranchScope(String branchScope) {
+        if (branchScope == null || branchScope.isBlank()) {
+            return "ALL";
+        }
+        String value = branchScope.trim();
+        return "ALL".equalsIgnoreCase(value) || "All Branches".equalsIgnoreCase(value) ? "ALL" : value;
     }
 }

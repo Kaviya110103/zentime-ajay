@@ -22,15 +22,19 @@ import com.example.demo.service.AdditionalWorkingDayService;
 import com.example.demo.service.EmployeeService;
 import com.example.demo.service.PayrollCompatibilityDefaults;
 import com.example.demo.service.RequestFilterService;
+import com.example.demo.service.ShiftResolverService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -78,6 +82,8 @@ private AdditionalWorkingDayService additionalWorkingDayService;
 private RequestFilterService requestFilterService;
 @Autowired
 private AttendanceSchedulerService attendanceSchedulerService;
+@Autowired
+private ShiftResolverService shiftResolverService;
 @Autowired
 private LocationRepository locationRepository;
 
@@ -152,6 +158,7 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
     record.setAttendanceStatus("Present");
     record.setDate(todayDate);
     record.setLocation(location); // Store location
+    applyShiftSnapshot(record, employee, LocalDate.now(), clientId);
 
     attendanceRecordRepository.save(record);
 
@@ -368,25 +375,64 @@ public ResponseEntity<?> completeMissedTimeout(
     attendanceRecordRepository.save(record);
     return ResponseEntity.ok("Timeout, missed times, and day status updated.");
 }
-   @CrossOrigin(origins = "*")
+@CrossOrigin(origins = "*")
 @PostMapping("/mark-time-in")
+@Transactional
 public ResponseEntity<String> markTimeIn(
         @RequestParam Long recordId,
-        @RequestParam MultipartFile imageIn) {
+        @RequestParam MultipartFile imageIn,
+        @RequestParam(required = false) Long clientId) {
     schemaMaintenanceService.ensureEmployeeSchema();
     Optional<AttendanceRecord> optionalRecord = attendanceRecordRepository.findById(recordId);
-    if (optionalRecord.isPresent()) {
-        try {
-            AttendanceRecord record = optionalRecord.get();
-            record.setTimeIn(LocalDateTime.now());
-            record.setImageIn(imageIn.getBytes());
-            attendanceRecordRepository.save(record);
-            return ResponseEntity.ok("Time-in recorded successfully.");
-        } catch (IOException e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Image processing failed");
-        }
-    } else {
+    if (optionalRecord.isEmpty()) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance record not found");
+    }
+
+    AttendanceRecord record = optionalRecord.get();
+    Employee employee = record.getEmployee();
+    Long employeeId = employee == null ? null : employee.getId();
+    Long recordClientId = employee == null ? null : employee.getClientId();
+
+    if (employee == null) {
+        LOGGER.warn("Time-in rejected because attendance record has no employee. recordId={}", recordId);
+        return ResponseEntity.badRequest().body("Attendance record is not linked to an employee.");
+    }
+    if (clientId != null && recordClientId != null && !clientId.equals(recordClientId)) {
+        LOGGER.warn("Time-in rejected because clientId does not match record. recordId={} employeeId={} requestClientId={} recordClientId={}",
+                recordId, employeeId, clientId, recordClientId);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Attendance record does not belong to this client.");
+    }
+    if (record.getTimeIn() != null) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body("Time-in already recorded.");
+    }
+    if (imageIn == null || imageIn.isEmpty()) {
+        return ResponseEntity.badRequest().body("Time-in photo is required.");
+    }
+
+    try {
+        if (record.getDate() == null || record.getDate().isBlank()) {
+            record.setDate(LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")));
+        }
+        applyShiftSnapshotIfMissing(record);
+        record.setTimeIn(LocalDateTime.now());
+        record.setImageIn(imageIn.getBytes());
+        attendanceRecordRepository.save(record);
+        return ResponseEntity.ok("Time-in recorded successfully.");
+    } catch (IOException e) {
+        LOGGER.error("Time-in image read failed. recordId={} employeeId={} clientId={}", recordId, employeeId, recordClientId, e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Image processing failed");
+    } catch (DataIntegrityViolationException e) {
+        LOGGER.error("Time-in save failed because attendance record data is invalid. recordId={} employeeId={} clientId={}",
+                recordId, employeeId, recordClientId, e);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body("Attendance record could not be saved. Please refresh and try again.");
+    } catch (DataAccessException e) {
+        LOGGER.error("Time-in database save failed. recordId={} employeeId={} clientId={}",
+                recordId, employeeId, recordClientId, e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Attendance save failed. Please try again.");
+    } catch (RuntimeException e) {
+        LOGGER.error("Unexpected time-in failure. recordId={} employeeId={} clientId={}",
+                recordId, employeeId, recordClientId, e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Time-in failed. Please try again.");
     }
 }
 
@@ -454,6 +500,7 @@ public ResponseEntity<String> markTimeIn(
                 }
                 LocalDateTime now = LocalDateTime.now();
                 record.setTimeOut(now);
+                applyShiftSnapshotIfMissing(record);
                 updateDerivedAttendanceHours(record);
                 if (overtimeApproved != null) {
                     record.setOvertimeApproved(overtimeApproved);
@@ -469,7 +516,7 @@ public ResponseEntity<String> markTimeIn(
                 if (Boolean.TRUE.equals(overtimeRequested)) {
                     Employee employee = record.getEmployee();
                     if (employee != null) {
-                        LocalTime shiftEnd = parseShiftEnd(employee);
+                        LocalTime shiftEnd = resolveShiftEnd(record);
                         LocalTime logoutTime = now.toLocalTime();
                         long overtimeMinutes = 0;
                         if (logoutTime.isAfter(shiftEnd)) {
@@ -1837,10 +1884,6 @@ private LocalTime parseShiftEnd(String raw) {
     }
 }
 
-private LocalTime parseShiftEnd(Employee employee) {
-    return PayrollCompatibilityDefaults.resolveShiftEnd(employee);
-}
-
 private void updateDerivedAttendanceHours(AttendanceRecord record) {
     if (record == null || record.getTimeIn() == null || record.getTimeOut() == null) {
         return;
@@ -1851,10 +1894,10 @@ private void updateDerivedAttendanceHours(AttendanceRecord record) {
 
     LocalDateTime shiftStart = record.getTimeIn()
             .toLocalDate()
-            .atTime(PayrollCompatibilityDefaults.resolveShiftStart(record.getEmployee()));
+            .atTime(resolveShiftStart(record));
     LocalDateTime shiftEnd = record.getTimeIn()
             .toLocalDate()
-            .atTime(parseShiftEnd(record.getEmployee()));
+            .atTime(resolveShiftEnd(record));
     if (!shiftEnd.isAfter(shiftStart)) {
         shiftEnd = shiftEnd.plusDays(1);
     }
@@ -1865,12 +1908,62 @@ private void updateDerivedAttendanceHours(AttendanceRecord record) {
             : 0;
     record.setWorkedHours(Math.round((workedMinutes / 60.0) * 100.0) / 100.0);
 
-    LocalTime shiftEndTime = parseShiftEnd(record.getEmployee());
+    LocalTime shiftEndTime = resolveShiftEnd(record);
     LocalTime actualOut = record.getTimeOut().toLocalTime();
     long overtimeMinutes = actualOut.isAfter(shiftEndTime)
             ? Duration.between(shiftEndTime, actualOut).toMinutes()
             : 0;
     record.setOvertime(Math.round((Math.max(0, overtimeMinutes) / 60.0) * 100.0) / 100.0);
+}
+
+private void applyShiftSnapshotIfMissing(AttendanceRecord record) {
+    if (record == null || record.getExpectedShiftStart() != null || record.getExpectedShiftEnd() != null) {
+        return;
+    }
+    Employee employee = record.getEmployee();
+    LocalDate date = resolveAttendanceRecordDate(record);
+    applyShiftSnapshot(record, employee, date, employee == null ? null : employee.getClientId());
+}
+
+private void applyShiftSnapshot(AttendanceRecord record, Employee employee, LocalDate date, Long clientId) {
+    if (record == null || employee == null || date == null) {
+        return;
+    }
+    ShiftResolverService.ShiftResolution resolution = shiftResolverService.resolve(employee, date, clientId);
+    record.setExpectedShiftStart(resolution.expectedShiftStartText());
+    record.setExpectedShiftEnd(resolution.expectedShiftEndText());
+    record.setExpectedMinutes(resolution.expectedMinutes());
+    record.setShiftSource(resolution.shiftSource());
+}
+
+private LocalDate resolveAttendanceRecordDate(AttendanceRecord record) {
+    if (record == null) {
+        return null;
+    }
+    if (record.getDate() != null && !record.getDate().isBlank()) {
+        try {
+            return LocalDate.parse(record.getDate().trim(), dateFormatter);
+        } catch (DateTimeParseException ignored) {
+            // Use punch date fallback below.
+        }
+    }
+    if (record.getTimeIn() != null) {
+        return record.getTimeIn().toLocalDate();
+    }
+    if (record.getTimeOut() != null) {
+        return record.getTimeOut().toLocalDate();
+    }
+    return null;
+}
+
+private LocalTime resolveShiftStart(AttendanceRecord record) {
+    return shiftResolverService.parseFlexibleTime(record == null ? null : record.getExpectedShiftStart())
+            .orElseGet(() -> PayrollCompatibilityDefaults.resolveShiftStart(record == null ? null : record.getEmployee()));
+}
+
+private LocalTime resolveShiftEnd(AttendanceRecord record) {
+    return shiftResolverService.parseFlexibleTime(record == null ? null : record.getExpectedShiftEnd())
+            .orElseGet(() -> PayrollCompatibilityDefaults.resolveShiftEnd(record == null ? null : record.getEmployee()));
 }
 
 

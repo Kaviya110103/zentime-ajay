@@ -20,8 +20,11 @@ export default function RequestFilterBar({
   clientId,
   selectedMonth,
   selectedBranch,
+  selectedEmployee = "",
+  employeeOptions = [],
   onMonthChange,
   onBranchChange,
+  onEmployeeChange,
   onRefresh,
   refreshing = false,
 }) {
@@ -89,6 +92,32 @@ export default function RequestFilterBar({
               </Select>
             </FormControl>
           </Grid>
+          {typeof onEmployeeChange === "function" && (
+            <Grid item xs={12} md={3}>
+              <FormControl fullWidth>
+                <InputLabel shrink>Employee</InputLabel>
+                <Select
+                  value={selectedEmployee}
+                  onChange={(event) => onEmployeeChange(event.target.value)}
+                  label="Employee"
+                  displayEmpty
+                  notched
+                  renderValue={(selected) => {
+                    if (!selected) return "All Employees";
+                    const option = employeeOptions.find((item) => item.value === selected);
+                    return option?.label || selected;
+                  }}
+                >
+                  <MenuItem value="">All Employees</MenuItem>
+                  {employeeOptions.map((employee) => (
+                    <MenuItem key={employee.value} value={employee.value}>
+                      {employee.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
           <Grid item xs={12} md={3}>
             <Box sx={{ display: "flex", gap: 1 }}>
               <Button
