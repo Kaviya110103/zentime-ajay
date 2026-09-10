@@ -23,6 +23,7 @@ import com.example.demo.service.EmployeeService;
 import com.example.demo.service.PayrollCompatibilityDefaults;
 import com.example.demo.service.RequestFilterService;
 import com.example.demo.service.ShiftResolverService;
+import com.example.demo.logging.RequestLogContext;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -107,6 +108,7 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
                                   @RequestParam(value = "clientId", required = false) Long clientId,
                                   @RequestParam(value = "latitude", required = false) Double latitude,
                                   @RequestParam(value = "longitude", required = false) Double longitude) {
+    long started = System.nanoTime();
     schemaMaintenanceService.ensureEmployeeSchema();
     String todayDate = LocalDate.now().format(dateFormatter);
     String yesterdayDate = LocalDate.now().minusDays(1).format(dateFormatter);
@@ -114,6 +116,8 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
     // 1. Check if employee exists
     Optional<Employee> employeeOptional = employeeRepository.findById(employeeId);
     if (employeeOptional.isEmpty()) {
+        LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=EMPLOYEE_NOT_FOUND employeeId={} clientId={} attendanceDate={} status=400 durationMs={}",
+                RequestLogContext.correlationId(), employeeId, clientId, todayDate, elapsedMs(started));
         return ResponseEntity.badRequest().body("Employee not found.");
     }
     Employee employee = employeeOptional.get();
@@ -121,6 +125,8 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
     if (latitude != null && longitude != null) {
         Long effectiveClientId = clientId != null ? clientId : employee.getClientId();
         if (!isInsideAnyBranchLocation(latitude, longitude, effectiveClientId)) {
+            LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=OUTSIDE_BRANCH employeeId={} clientId={} attendanceDate={} status=403 durationMs={}",
+                    RequestLogContext.correlationId(), employeeId, effectiveClientId, todayDate, elapsedMs(started));
             Map<String, Object> inactive = new HashMap<>();
             inactive.put("status", "Inactive");
             inactive.put("message", "Outside assigned branch location. Submit location request.");
@@ -139,6 +145,8 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
                 Map<String, Object> response = new HashMap<>();
                 response.put("error", "You didn’t mark time-out yesterday. Please submit a timeout reason.");
                 response.put("missedTimeoutRecordId", yesterdayRecord.getId());
+                LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=PREVIOUS_TIMEOUT_MISSING employeeId={} clientId={} attendanceDate={} previousRecordId={} status=403 durationMs={}",
+                        RequestLogContext.correlationId(), employeeId, clientId, todayDate, yesterdayRecord.getId(), elapsedMs(started));
                 return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
             }
         }
@@ -148,6 +156,8 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
     List<AttendanceRecord> todayRecords = attendanceRecordRepository.findByEmployeeIdAndDate(employeeId, todayDate);
     if (!todayRecords.isEmpty()) {
         String status = todayRecords.get(0).getAttendanceStatus();
+        LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=ALREADY_MARKED employeeId={} clientId={} attendanceDate={} attendanceRecordId={} attendanceStatus={} status=400 durationMs={}",
+                RequestLogContext.correlationId(), employeeId, clientId, todayDate, todayRecords.get(0).getId(), status, elapsedMs(started));
         return ResponseEntity.badRequest()
                 .body("Attendance already marked as '" + status + "' for today.");
     }
@@ -162,6 +172,8 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
 
     attendanceRecordRepository.save(record);
 
+    LOGGER.info("event=START_DAY_SUCCESS correlationId={} employeeId={} clientId={} attendanceDate={} attendanceRecordId={} status=200 durationMs={}",
+            RequestLogContext.correlationId(), employeeId, clientId, todayDate, record.getId(), elapsedMs(started));
     return ResponseEntity.ok("Day started. Please mark time-in.");
 }
 
@@ -382,9 +394,12 @@ public ResponseEntity<String> markTimeIn(
         @RequestParam Long recordId,
         @RequestParam MultipartFile imageIn,
         @RequestParam(required = false) Long clientId) {
+    long started = System.nanoTime();
     schemaMaintenanceService.ensureEmployeeSchema();
     Optional<AttendanceRecord> optionalRecord = attendanceRecordRepository.findById(recordId);
     if (optionalRecord.isEmpty()) {
+        LOGGER.warn("event=TIME_IN_FAILED correlationId={} reason=RECORD_NOT_FOUND attendanceRecordId={} clientId={} status=404 durationMs={}",
+                RequestLogContext.correlationId(), recordId, clientId, elapsedMs(started));
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance record not found");
     }
 
@@ -394,18 +409,23 @@ public ResponseEntity<String> markTimeIn(
     Long recordClientId = employee == null ? null : employee.getClientId();
 
     if (employee == null) {
-        LOGGER.warn("Time-in rejected because attendance record has no employee. recordId={}", recordId);
+        LOGGER.warn("event=TIME_IN_FAILED correlationId={} reason=EMPLOYEE_MISSING attendanceRecordId={} clientId={} status=400 durationMs={}",
+                RequestLogContext.correlationId(), recordId, clientId, elapsedMs(started));
         return ResponseEntity.badRequest().body("Attendance record is not linked to an employee.");
     }
     if (clientId != null && recordClientId != null && !clientId.equals(recordClientId)) {
-        LOGGER.warn("Time-in rejected because clientId does not match record. recordId={} employeeId={} requestClientId={} recordClientId={}",
-                recordId, employeeId, clientId, recordClientId);
+        LOGGER.warn("event=TIME_IN_FAILED correlationId={} reason=CLIENT_MISMATCH attendanceRecordId={} employeeId={} requestClientId={} recordClientId={} status=403 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, clientId, recordClientId, elapsedMs(started));
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Attendance record does not belong to this client.");
     }
     if (record.getTimeIn() != null) {
+        LOGGER.warn("event=TIME_IN_DUPLICATE correlationId={} attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=409 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
         return ResponseEntity.status(HttpStatus.CONFLICT).body("Time-in already recorded.");
     }
     if (imageIn == null || imageIn.isEmpty()) {
+        LOGGER.warn("event=TIME_IN_FAILED correlationId={} reason=PHOTO_MISSING attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=400 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
         return ResponseEntity.badRequest().body("Time-in photo is required.");
     }
 
@@ -417,21 +437,24 @@ public ResponseEntity<String> markTimeIn(
         record.setTimeIn(LocalDateTime.now());
         record.setImageIn(imageIn.getBytes());
         attendanceRecordRepository.save(record);
+        LOGGER.info("event=TIME_IN_SUCCESS correlationId={} attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=200 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
         return ResponseEntity.ok("Time-in recorded successfully.");
     } catch (IOException e) {
-        LOGGER.error("Time-in image read failed. recordId={} employeeId={} clientId={}", recordId, employeeId, recordClientId, e);
+        LOGGER.error("event=TIME_IN_FAILED correlationId={} reason=IMAGE_READ_FAILED attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=500 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started), e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Image processing failed");
     } catch (DataIntegrityViolationException e) {
-        LOGGER.error("Time-in save failed because attendance record data is invalid. recordId={} employeeId={} clientId={}",
-                recordId, employeeId, recordClientId, e);
+        LOGGER.error("event=TIME_IN_FAILED correlationId={} reason=DATA_INTEGRITY attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=409 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started), e);
         return ResponseEntity.status(HttpStatus.CONFLICT).body("Attendance record could not be saved. Please refresh and try again.");
     } catch (DataAccessException e) {
-        LOGGER.error("Time-in database save failed. recordId={} employeeId={} clientId={}",
-                recordId, employeeId, recordClientId, e);
+        LOGGER.error("event=TIME_IN_FAILED correlationId={} reason=DATA_ACCESS attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=500 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started), e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Attendance save failed. Please try again.");
     } catch (RuntimeException e) {
-        LOGGER.error("Unexpected time-in failure. recordId={} employeeId={} clientId={}",
-                recordId, employeeId, recordClientId, e);
+        LOGGER.error("event=TIME_IN_FAILED correlationId={} reason=UNEXPECTED attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=500 durationMs={}",
+                RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started), e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Time-in failed. Please try again.");
     }
 }
@@ -489,14 +512,30 @@ public ResponseEntity<String> markTimeIn(
             @RequestParam(required = false) Boolean overtimeApproved,
             @RequestParam(required = false) Boolean overtimeRequested,
             @RequestParam(required = false) String overtimeReason) {
+        long started = System.nanoTime();
         schemaMaintenanceService.ensureEmployeeSchema();
         Optional<AttendanceRecord> optionalRecord = attendanceRecordRepository.findById(recordId);
         if (optionalRecord.isPresent()) {
             AttendanceRecord record = optionalRecord.get();
+            Employee recordEmployee = record.getEmployee();
+            Long employeeId = recordEmployee == null ? null : recordEmployee.getId();
+            Long recordClientId = recordEmployee == null ? null : recordEmployee.getClientId();
             try {
                 if (Boolean.TRUE.equals(overtimeRequested)
                         && (overtimeReason == null || overtimeReason.trim().isEmpty())) {
+                    LOGGER.warn("event=TIME_OUT_FAILED correlationId={} reason=OVERTIME_REASON_MISSING attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=400 durationMs={}",
+                            RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
                     return ResponseEntity.badRequest().body("Overtime reason is required.");
+                }
+                if (record.getTimeIn() == null) {
+                    LOGGER.warn("event=TIME_OUT_WITHOUT_TIME_IN correlationId={} attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=400 durationMs={}",
+                            RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
+                    return ResponseEntity.badRequest().body("Time-in must be recorded before time-out.");
+                }
+                if (record.getTimeOut() != null) {
+                    LOGGER.warn("event=TIME_OUT_DUPLICATE correlationId={} attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=409 durationMs={}",
+                            RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body("Time-out already recorded.");
                 }
                 LocalDateTime now = LocalDateTime.now();
                 record.setTimeOut(now);
@@ -539,11 +578,17 @@ public ResponseEntity<String> markTimeIn(
                     }
                 }
 
+                LOGGER.info("event=TIME_OUT_SUCCESS correlationId={} attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=200 durationMs={}",
+                        RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started));
                 return ResponseEntity.ok("Time-out recorded successfully.");
             } catch (IOException e) {
+                LOGGER.error("event=TIME_OUT_FAILED correlationId={} reason=IMAGE_READ_FAILED attendanceRecordId={} employeeId={} clientId={} attendanceDate={} status=500 durationMs={}",
+                        RequestLogContext.correlationId(), recordId, employeeId, recordClientId, record.getDate(), elapsedMs(started), e);
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Failed to process image.");
             }
         } else {
+            LOGGER.warn("event=TIME_OUT_FAILED correlationId={} reason=RECORD_NOT_FOUND attendanceRecordId={} status=404 durationMs={}",
+                    RequestLogContext.correlationId(), recordId, elapsedMs(started));
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance record not found.");
         }
     }
@@ -613,6 +658,7 @@ public ResponseEntity<String> markTimeIn(
     public ResponseEntity<Object> checkRecord(
             @RequestParam Long employeeId,
             @RequestParam Long recordId) {
+        long started = System.nanoTime();
     
         Optional<AttendanceRecord> optionalRecord = attendanceRecordRepository.findById(recordId);
     
@@ -620,12 +666,18 @@ public ResponseEntity<String> markTimeIn(
             AttendanceRecord record = optionalRecord.get();
     
             if (record.getEmployee() != null && record.getEmployee().getId().equals(employeeId)) {
+                LOGGER.info("event=CHECK_RECORD_SUCCESS correlationId={} attendanceRecordId={} employeeId={} attendanceDate={} status=200 durationMs={}",
+                        RequestLogContext.correlationId(), recordId, employeeId, record.getDate(), elapsedMs(started));
                 return ResponseEntity.ok(record); // Return the full record details
             } else {
+                LOGGER.warn("event=CHECK_RECORD_FAILED correlationId={} reason=EMPLOYEE_MISMATCH attendanceRecordId={} employeeId={} status=400 durationMs={}",
+                        RequestLogContext.correlationId(), recordId, employeeId, elapsedMs(started));
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                         .body("Employee ID does not match the record.");
             }
         } else {
+            LOGGER.warn("event=CHECK_RECORD_FAILED correlationId={} reason=RECORD_NOT_FOUND attendanceRecordId={} employeeId={} status=404 durationMs={}",
+                    RequestLogContext.correlationId(), recordId, employeeId, elapsedMs(started));
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body("Attendance record not found.");
         }
@@ -1605,6 +1657,10 @@ private int intValue(Object value) {
 
 private long elapsedMs(long startNanos, long endNanos) {
     return Math.max(0L, (endNanos - startNanos) / 1_000_000L);
+}
+
+private long elapsedMs(long startNanos) {
+    return elapsedMs(startNanos, System.nanoTime());
 }
 
 private record DashboardDaySummary(long present, long absent, long late, long lateMinutes, long onTime) {

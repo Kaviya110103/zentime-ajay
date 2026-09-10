@@ -90,6 +90,77 @@ class AttendanceRecordControllerFillterTest {
         assertThat((List<?>) response.getBody()).isEmpty();
     }
 
+    @Test
+    void searchAttendanceRecordsAppliesEmployeeMonthAndClientIdFilters() {
+        Employee employee = new Employee();
+        employee.setId(10L);
+        employee.setClientId(1L);
+        when(employeeRepository.findById(10L)).thenReturn(Optional.of(employee));
+        when(employeeRepository.findByClientId(1L)).thenReturn(List.of(employee));
+        when(attendanceRecordRepository.findAttendanceRecordRowsByClientEmployeeAndDatesForSearch(
+                eq(1L), eq(10L), any(), any(Pageable.class)))
+                .thenReturn(List.<Object[]>of(attendanceRow(5L, "30/08/2026")));
+        when(attendanceClassificationService.classifyRecordMaps(any(), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(attendanceClassificationService.classifyCalendar(eq(employee), any(), any(), eq(1L)))
+                .thenReturn(List.of(classifiedRecord(5L, "30/08/2026")));
+
+        ResponseEntity<?> response = controller.searchAttendanceRecords(
+                1L, "10", null, null, null, null, 8, 2026, null, 0, 5000);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        List<?> body = (List<?>) response.getBody();
+        assertThat(body).hasSize(31);
+        assertThat((String) ((Map<?, ?>) body.get(0)).get("date")).isEqualTo("31/08/2026");
+        assertThat(body)
+                .anySatisfy(item -> assertThat((String) ((Map<?, ?>) item).get("date")).isEqualTo("30/08/2026"));
+    }
+
+    @Test
+    void searchAttendanceRecordsRejectsEmployeeFromDifferentClientWithEmptyResult() {
+        Employee employee = new Employee();
+        employee.setId(10L);
+        employee.setClientId(2L);
+        when(employeeRepository.findById(10L)).thenReturn(Optional.of(employee));
+
+        ResponseEntity<?> response = controller.searchAttendanceRecords(
+                1L, "10", null, null, null, null, 8, 2026, null, 0, 5000);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat((List<?>) response.getBody()).isEmpty();
+    }
+
+    @Test
+    void monthlyAttendanceReportWithClientIdReturnsClassifiedMonthRows() {
+        Employee employee = new Employee();
+        employee.setId(10L);
+        employee.setClientId(1L);
+        when(employeeRepository.findById(10L)).thenReturn(Optional.of(employee));
+        when(attendanceRecordRepository.findByEmployeeIdAndDatesWithEmployee(eq(10L), any(), eq(1L)))
+                .thenReturn(List.of());
+        when(attendanceClassificationService.classifyCalendar(eq(employee), any(), any(), eq(1L)))
+                .thenReturn(List.of(classifiedRecord(1L, "31/08/2026")));
+        when(attendanceClassificationService.classifyRecordMaps(any(), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        List<Map<String, Object>> response = controller.getAttendanceByEmployeeIdAndMonth("10", 8, 2026, 1L);
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).get("date")).isEqualTo("31/08/2026");
+    }
+
+    @Test
+    void monthlyAttendanceReportWithInvalidClientIdDoesNotReturnOtherClientEmployeeData() {
+        Employee employee = new Employee();
+        employee.setId(10L);
+        employee.setClientId(2L);
+        when(employeeRepository.findById(10L)).thenReturn(Optional.of(employee));
+
+        List<Map<String, Object>> response = controller.getAttendanceByEmployeeIdAndMonth("10", 8, 2026, 1L);
+
+        assertThat(response).isEmpty();
+    }
+
     private Object[] attendanceRow(Long id, String date) {
         return new Object[] {
                 id, LocalDateTime.now(), null, null, null, "Present", date,

@@ -425,6 +425,9 @@ const Employee = () => {
           <TouchableOpacity
             style={styles.menuButton}
             onPress={() => setMenuVisible(true)}
+            testID="profile-menu-button"
+            accessibilityLabel="Profile menu"
+            accessibilityRole="button"
           >
             <Ionicons name="menu" size={24} color="#ffffff" />
           </TouchableOpacity>
@@ -444,7 +447,13 @@ const Employee = () => {
           >
             <View style={[styles.modalContainer, isDesktop && styles.desktopModalContainer]}>
               <View style={[styles.modalContent, { backgroundColor: colors.surface, borderColor: colors.border }, isDesktop && styles.desktopModalContent]}>
-                <TouchableOpacity style={styles.menuItem} onPress={toggleEditMode}>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={toggleEditMode}
+                  testID="profile-edit-toggle"
+                  accessibilityLabel={isEditing ? "Cancel Editing" : "Edit Profile"}
+                  accessibilityRole="button"
+                >
                   <Ionicons name={isEditing ? "close" : "create"} size={20} color={colors.mutedText} />
                   <Text style={[styles.menuItemText, { color: colors.text }]}>
                     {isEditing ? "Cancel Editing" : "Edit Profile"}
@@ -454,12 +463,18 @@ const Employee = () => {
                 <TouchableOpacity style={styles.menuItem} onPress={() => {
                   setMenuVisible(false);
                   router.push("/MarkAttendance");
-                }}>
+                }} testID="profile-menu-mark-attendance" accessibilityLabel="Mark Attendance" accessibilityRole="button">
                   <Ionicons name="calendar" size={20} color={colors.mutedText} />
                   <Text style={[styles.menuItemText, { color: colors.text }]}>Mark Attendance</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.menuItem, styles.logoutMenuItem]} onPress={handleLogout}>
+                <TouchableOpacity
+                  style={[styles.menuItem, styles.logoutMenuItem]}
+                  onPress={handleLogout}
+                  testID="profile-menu-logout"
+                  accessibilityLabel="Logout"
+                  accessibilityRole="button"
+                >
                   <Ionicons name="log-out" size={20} color="#ef4444" />
                   <Text style={[styles.menuItemText, styles.logoutText]}>Logout</Text>
                 </TouchableOpacity>
@@ -823,6 +838,9 @@ const Employee = () => {
                 style={[styles.actionButton, styles.cancelButton]} 
                 onPress={handleCancel}
                 disabled={saving}
+                testID="profile-edit-cancel"
+                accessibilityLabel="Cancel profile changes"
+                accessibilityRole="button"
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -830,6 +848,9 @@ const Employee = () => {
                 style={[styles.actionButton, styles.saveButton]} 
                 onPress={handleSave}
                 disabled={saving}
+                testID="profile-edit-save"
+                accessibilityLabel="Save Changes"
+                accessibilityRole="button"
               >
                 {saving ? (
                   <ActivityIndicator size="small" color="#ffffff" />
@@ -909,6 +930,8 @@ const EditableInfoRow = React.memo<{
         textAlignVertical="center"
         underlineColorAndroid="transparent"
         clearButtonMode="while-editing"
+        testID={`profile-input-${String(field)}`}
+        accessibilityLabel={`${label} input`}
       />
     </View>
   );

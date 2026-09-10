@@ -1,0 +1,32 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- tapOn:
+    id: "bottom-nav-leave"
+    optional: true
+- assertVisible: "Leave Request"
+- assertVisible: "Leave Type"
+- assertVisible: "Start Date"
+- assertVisible: "End Date"
+- tapOn:
+    id: "leave-submit"
+- assertVisible:
+    text: "Missing Information|Please fill all required fields"
+    optional: true
+- tapOn:
+    id: "leave-reason"
+- inputText: "QA mobile smoke test leave request"
+- assertVisible: "Submit Request"

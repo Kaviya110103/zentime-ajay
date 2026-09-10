@@ -19,6 +19,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
+import com.example.demo.logging.RequestLogContext;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -121,9 +122,12 @@ public class GlobalExceptionHandler {
             Exception ex,
             HttpServletRequest request) {
         LOGGER.error(
-                "Unhandled backend exception method={} uri={} exceptionClass={} message={}",
+                "event=UNHANDLED_EXCEPTION correlationId={} method={} uri={} clientId={} employeeId={} exceptionClass={} message={}",
+                RequestLogContext.correlationId(),
                 request == null ? null : request.getMethod(),
-                request == null ? null : request.getRequestURI(),
+                request == null ? null : RequestLogContext.sanitizePath(request.getRequestURI()),
+                request == null ? null : request.getParameter("clientId"),
+                request == null ? null : request.getParameter("employeeId"),
                 ex == null ? null : ex.getClass().getName(),
                 ex == null ? null : ex.getMessage(),
                 ex);

@@ -256,6 +256,9 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
           ]}
           onPress={handleStartDayFlow}
           disabled={loading || isAbsentToday}
+          testID="attendance-start-day-button"
+          accessibilityLabel={isAbsentToday ? "Take Rest" : "Start Day"}
+          accessibilityRole="button"
         >
           {loading ? (
             <ActivityIndicator size="small" color={colors.primary} />
@@ -312,6 +315,9 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
               style={[styles.confirmButton, (!canStartDay || loading) && styles.disabledButton]}
               onPress={() => handleStartDay()}
               disabled={!canStartDay || loading}
+              testID="attendance-confirm-start-day"
+              accessibilityLabel="Confirm Start Day"
+              accessibilityRole="button"
             >
               {loading ? (
                 <ActivityIndicator color="white" />
@@ -325,6 +331,9 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
                   style={[styles.locationRequestButton, loading && styles.disabledButton]}
                   onPress={openLocationRequestModal}
                   disabled={loading}
+                  testID="attendance-location-request"
+                  accessibilityLabel="Submit Location Request"
+                  accessibilityRole="button"
                 >
                   <Text style={styles.buttonText}>Submit Location Request</Text>
                 </TouchableOpacity>
@@ -357,6 +366,8 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
               value={locationRequestReason}
               onChangeText={setLocationRequestReason}
               editable={!loading}
+              testID="attendance-location-request-reason"
+              accessibilityLabel="Location request reason"
             />
             <View style={styles.requestActions}>
               <TouchableOpacity
@@ -373,6 +384,9 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
                 style={[styles.confirmButton, (!locationRequestReason.trim() || !currentCoords || loading) && styles.disabledButton]}
                 onPress={submitLocationRequest}
                 disabled={!locationRequestReason.trim() || !currentCoords || loading}
+                testID="attendance-location-request-submit"
+                accessibilityLabel="Submit location request"
+                accessibilityRole="button"
               >
                 {loading ? <ActivityIndicator color="white" /> : <Text style={styles.buttonText}>Submit</Text>}
               </TouchableOpacity>
@@ -409,12 +423,17 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
                 value={timeoutReason}
                 onChangeText={setTimeoutReason}
                 editable={!loading}
+                testID="attendance-timeout-reason"
+                accessibilityLabel="Timeout reason"
               />
               
               <TouchableOpacity
                 style={[styles.confirmButton, (!timeoutReason.trim() || loading) && styles.disabledButton]}
                 onPress={handleSubmitTimeoutReason}
                 disabled={!timeoutReason.trim() || loading}
+                testID="attendance-timeout-reason-submit"
+                accessibilityLabel="Submit Reason"
+                accessibilityRole="button"
               >
                 {loading ? (
                   <ActivityIndicator color="white" />

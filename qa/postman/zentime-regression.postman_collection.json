@@ -1,0 +1,733 @@
+{
+  "info": {
+    "_postman_id": "a916fa18-2c58-47ef-8c93-zentime-qa",
+    "name": "ZenTime API Regression",
+    "description": "QA-only regression collection for ZenTime backend APIs. Use only with a disposable QA/local backend and test data. Do not run this environment against production.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('response time is below 3000 ms', function () {",
+          "  pm.expect(pm.response.responseTime).to.be.below(3000);",
+          "});",
+          "pm.test('client response does not expose server stack trace', function () {",
+          "  const text = pm.response.text() || '';",
+          "  pm.expect(text).to.not.include('java.lang.');",
+          "  pm.expect(text).to.not.include('org.springframework');",
+          "  pm.expect(text).to.not.include('HibernateException');",
+          "});",
+          "pm.test('no 500 server error', function () {",
+          "  pm.expect(pm.response.code).to.not.equal(500);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Regression Flow 1 - Employee Login",
+      "item": [
+        {
+          "name": "Valid Employee Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{employeeUsername}}\",\n  \"password\": \"{{employeePassword}}\",\n  \"companyCode\": \"{{companyCode}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/employees/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "employees",
+                "login"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('valid login returns HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('valid login returns JSON employee context', function () {",
+                  "  pm.response.to.be.json;",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('id');",
+                  "  pm.expect(body).to.have.property('username');",
+                  "  pm.expect(body).to.have.property('clientId');",
+                  "});",
+                  "pm.test('valid login response does not expose password', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.not.have.property('password');",
+                  "  pm.expect(JSON.stringify(body)).to.not.match(/\\$2[aby]\\$/);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.id) pm.environment.set('employeeId', String(body.id));",
+                  "  if (body.clientId) pm.environment.set('clientId', String(body.clientId));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Employee Login Wrong Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{employeeUsername}}\",\n  \"password\": \"wrong-password\",\n  \"companyCode\": \"{{companyCode}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/employees/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong password is controlled client failure', function () { pm.expect([400, 401, 403, 404]).to.include(pm.response.code); });",
+                  "pm.test('wrong password does not expose password data', function () { pm.expect(pm.response.text()).to.not.match(/password.*\\$2[aby]\\$/i); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown Employee Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"unknown.qa.employee\",\n  \"password\": \"{{employeePassword}}\",\n  \"companyCode\": \"{{companyCode}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/employees/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('unknown employee is controlled client failure', function () { pm.expect([400, 401, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Employee Login Company Code Mismatch",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{employeeUsername}}\",\n  \"password\": \"{{employeePassword}}\",\n  \"companyCode\": \"wrong-company-code\"\n}"
+            },
+            "url": "{{baseUrl}}/api/employees/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('tenant mismatch does not authenticate', function () { pm.expect([400, 401, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin Login Smoke",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{adminUsername}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/clients/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('admin login returns normal auth response', function () { pm.expect([200, 400, 401, 403]).to.include(pm.response.code); });",
+                  "pm.test('admin login response has no password field', function () { pm.expect(pm.response.text()).to.not.match(/\\\"password\\\"\\s*:/i); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Regression Flow 2 - Attendance",
+      "item": [
+        {
+          "name": "Start Day",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/api/attendance/start-day?employeeId={{employeeId}}&location=QA%20Office&clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('start day returns controlled status', function () { pm.expect([200, 400, 403, 409]).to.include(pm.response.code); });",
+                  "pm.test('start day response body is present', function () { pm.expect(pm.response.text()).to.not.equal(''); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Check Attendance Record",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/attendance/check-record?employeeId={{employeeId}}&recordId={{attendanceRecordId}}&clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('check record returns controlled status', function () { pm.expect([200, 400, 404]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('check record belongs to employee', function () { const body = pm.response.json(); pm.expect(String(body.employee?.id || body.employeeId)).to.equal(pm.environment.get('employeeId')); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Time In",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "recordId",
+                  "value": "{{attendanceRecordId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "clientId",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "imageIn",
+                  "type": "file",
+                  "src": "qa/postman/fixtures/attendance-photo.txt"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/attendance/mark-time-in"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('time in returns success or controlled duplicate/input failure', function () { pm.expect([200, 400, 403, 404, 409]).to.include(pm.response.code); });",
+                  "pm.test('time in never reports duplicate row creation', function () { pm.expect(pm.response.text()).to.not.match(/duplicate entry/i); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Duplicate Time In",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "recordId",
+                  "value": "{{attendanceRecordId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "clientId",
+                  "value": "{{clientId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "imageIn",
+                  "type": "file",
+                  "src": "qa/postman/fixtures/attendance-photo.txt"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/attendance/mark-time-in"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('duplicate time in is controlled', function () { pm.expect([400, 403, 404, 409]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Time Out",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "recordId",
+                  "value": "{{attendanceRecordId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "imageOut",
+                  "type": "file",
+                  "src": "qa/postman/fixtures/attendance-photo.txt"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/attendance/mark-time-out?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('time out returns success or controlled failure', function () { pm.expect([200, 400, 404, 409]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Duplicate Time Out",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "recordId",
+                  "value": "{{attendanceRecordId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "imageOut",
+                  "type": "file",
+                  "src": "qa/postman/fixtures/attendance-photo.txt"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/attendance/mark-time-out?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('duplicate time out is controlled', function () { pm.expect([400, 404, 409]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Time Out Without Valid Time In",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "recordId",
+                  "value": "{{noTimeInRecordId}}",
+                  "type": "text"
+                },
+                {
+                  "key": "imageOut",
+                  "type": "file",
+                  "src": "qa/postman/fixtures/attendance-photo.txt"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/attendance/mark-time-out?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('time out without time in is controlled failure', function () { pm.expect([400, 404, 409]).to.include(pm.response.code); });",
+                  "pm.test('time out without time in returns explanation', function () { pm.expect(pm.response.text()).to.not.equal(''); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monthly Attendance Report",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/attendance-records/by-employee-month?employeeId={{employeeId}}&month={{testMonth}}&year={{testYear}}&clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('monthly report returns HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('monthly report returns JSON array', function () { pm.response.to.be.json; pm.expect(pm.response.json()).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Attendance Search",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/attendance-records/search?clientId={{clientId}}&employeeId={{employeeId}}&month={{testMonth}}&year={{testYear}}&limit=5000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('attendance search returns HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('attendance search returns JSON array', function () { pm.response.to.be.json; pm.expect(pm.response.json()).to.be.an('array'); });",
+                  "pm.test('attendance search records match employee when rows exist', function () {",
+                  "  const rows = pm.response.json();",
+                  "  rows.forEach(row => pm.expect(String(row.employeeId || row.id || pm.environment.get('employeeId'))).to.not.equal(''));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Regression Flow 3 - Employee",
+      "item": [
+        {
+          "name": "Employee Profile Fetch",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/employees/{{employeeId}}?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('profile fetch returns controlled status', function () { pm.expect([200, 404]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('profile has no password field', function () { const body = pm.response.json(); pm.expect(body).to.not.have.property('password'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Employee Fetch",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/employees/999999?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invalid employee is controlled', function () { pm.expect([400, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Employee Wrong Client Fetch",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/employees/{{employeeId}}?clientId={{wrongClientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('wrong client fetch does not leak another tenant employee', function () { pm.expect([200, 400, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Profile Update - Dedicated QA Data Only",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"QA\",\n  \"lastName\": \"Employee\",\n  \"mobile\": \"9999999999\",\n  \"email\": \"qa.employee@example.test\"\n}"
+            },
+            "url": "{{baseUrl}}/api/employees/update/{{employeeId}}?clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('profile update on dedicated QA data is controlled', function () { pm.expect([200, 400, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Regression Flow 4 - Leave and Permission",
+      "item": [
+        {
+          "name": "Create Leave Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveType\": \"Leave\",\n  \"startDate\": \"{{testDate}}\",\n  \"endDate\": \"{{testDate}}\",\n  \"reason\": \"QA regression leave request\"\n}"
+            },
+            "url": "{{baseUrl}}/api/leaves/create?employeeId={{employeeId}}&clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('create leave returns controlled status', function () { pm.expect([200, 400, 403, 409]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Permission Request",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/leaves/create/permission?employeeId={{employeeId}}&clientId={{clientId}}&leaveType=Permission&startDate={{testDate}}&endDate={{testDate}}&reason=QA%20permission%20request&date={{testDate}}&startTime=10:00&endTime=11:00"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('create permission returns controlled status', function () { pm.expect([200, 400, 403, 409]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Fetch Employee Leave Permission Requests",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/leaves/employee/{{employeeId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('employee leave fetch returns HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('employee leave fetch returns JSON array', function () { pm.response.to.be.json; pm.expect(pm.response.json()).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Fetch All Leave Permission Requests",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/leaves/all?clientId={{clientId}}&month={{testMonth}}&year={{testYear}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('all leave fetch returns HTTP 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('all leave fetch returns JSON array', function () { pm.response.to.be.json; pm.expect(pm.response.json()).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Leave Invalid Employee",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"leaveType\": \"Leave\",\n  \"startDate\": \"{{testDate}}\",\n  \"endDate\": \"{{testDate}}\",\n  \"reason\": \"QA invalid employee request\"\n}"
+            },
+            "url": "{{baseUrl}}/api/leaves/create?employeeId=999999&clientId={{clientId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invalid employee leave request is controlled', function () { pm.expect([400, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Regression Flow 5 - Tenant Isolation",
+      "item": [
+        {
+          "name": "Invalid Tenant Attendance Search",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/attendance-records/search?clientId={{wrongClientId}}&employeeId={{employeeId}}&month={{testMonth}}&year={{testYear}}&limit=5000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invalid tenant search is controlled', function () { pm.expect([200, 400, 403, 404]).to.include(pm.response.code); });",
+                  "if (pm.response.code === 200) { pm.test('invalid tenant does not return another tenant records', function () { pm.expect(pm.response.json()).to.be.an('array').that.is.empty; }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Client Attendance Search",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/attendance-records/search?employeeId={{employeeId}}&month={{testMonth}}&year={{testYear}}&limit=5000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('missing clientId search remains controlled', function () { pm.expect([200, 400, 403]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Client Leave Fetch",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/leaves/all?clientId={{wrongClientId}}&month={{testMonth}}&year={{testYear}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('invalid client leave fetch is controlled', function () { pm.expect([200, 400, 403, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

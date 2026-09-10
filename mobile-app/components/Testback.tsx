@@ -387,6 +387,9 @@ const AttendanceFlow: React.FC = () => {
           style={[styles.touchIconBox, actionCardStyle, isDisabled && styles.disabledBox]}
           onPress={handleActionPress}
           disabled={isDisabled}
+          testID="attendance-primary-action"
+          accessibilityLabel={`Attendance ${label}`}
+          accessibilityRole="button"
         >
           {loading ? (
             <ActivityIndicator size="small" color={colors.primary} />

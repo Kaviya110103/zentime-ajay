@@ -217,9 +217,12 @@ useEffect(() => {
                     />
                   </View>
                 ) : (
-                  <TouchableOpacity
+            <TouchableOpacity
                     onPress={() => setShowStartPicker(true)}
                     style={[styles.dateButton, { backgroundColor: isDark ? '#0b1220' : '#F9FAFB', borderColor: colors.border }]}
+                    testID="leave-start-date"
+                    accessibilityLabel="Select leave start date"
+                    accessibilityRole="button"
                   >
                     <Text style={[styles.dateText, { color: colors.mutedText }, startDate && styles.dateTextSelected, startDate && { color: colors.text }]}>
                       {startDate ? formatDate(startDate) : "Select date"}
@@ -271,6 +274,9 @@ useEffect(() => {
                   <TouchableOpacity
                     onPress={() => setShowEndPicker(true)}
                     style={[styles.dateButton, { backgroundColor: isDark ? '#0b1220' : '#F9FAFB', borderColor: colors.border }]}
+                    testID="leave-end-date"
+                    accessibilityLabel="Select leave end date"
+                    accessibilityRole="button"
                   >
                     <Text style={[styles.dateText, { color: colors.mutedText }, endDate && styles.dateTextSelected, endDate && { color: colors.text }]}>
                       {endDate ? formatDate(endDate) : "Select date"}
@@ -319,6 +325,8 @@ useEffect(() => {
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
+                testID="leave-reason"
+                accessibilityLabel="Leave reason"
               />
               <Text style={[styles.characterCount, { color: colors.mutedText }]}>{reason.length}/500</Text>
             </View>
@@ -328,6 +336,9 @@ useEffect(() => {
               style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
               onPress={handleSubmit}
               disabled={isSubmitting}
+              testID="leave-submit"
+              accessibilityLabel="Submit leave request"
+              accessibilityRole="button"
             >
               <LinearGradient
                 colors={isSubmitting ? ['#9CA3AF', '#6B7280'] : ['#7726B9', '#351153']}
