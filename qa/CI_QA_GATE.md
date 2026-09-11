@@ -7,7 +7,8 @@ This QA gate runs on pull requests and on pushes to the `qa-testing` branch.
 - `backend-tests`: runs the Spring Boot backend test suite with the `test` profile. The MySQL integration tests use Testcontainers and GitHub Actions Docker, so they use disposable databases only.
 - `admin-build`: installs Admin dependencies with `npm ci` and runs the React production build.
 - `mobile-check`: installs Mobile dependencies with `npm ci`, runs `npx tsc --noEmit`, and validates the Expo public config.
-- `qa-gate`: passes only if backend, admin, and mobile jobs all pass.
+- `newman-regression`: starts a disposable MySQL service, starts the backend with the `ci` profile on localhost, seeds QA-only data, and runs the Postman/Newman regression suite.
+- `qa-gate`: passes only if backend, admin, mobile, and Newman regression jobs all pass.
 
 ## Merge Blocking
 
@@ -15,14 +16,15 @@ The `qa-gate` job is the single check that can be marked as required in GitHub b
 
 ## Newman Regression
 
-Newman is not a mandatory CI job yet. The current Postman suite requires a running QA backend plus known QA seed data. To safely enable it in GitHub Actions, add an automated disposable MySQL service or Testcontainers-backed backend start step, seed QA-only data, wait for the backend health check, and then run:
+Newman is a mandatory CI job. It runs only against the GitHub Actions localhost backend and disposable MySQL data:
 
 ```bash
 newman run qa/postman/zentime-regression.postman_collection.json \
-  -e qa/postman/environments/qa-testing.postman_environment.json
+  -e qa/postman/environments/qa-testing.postman_environment.json \
+  --env-var baseUrl=http://127.0.0.1:5001
 ```
 
-The Newman job must use only localhost/disposable CI data and must never point to production.
+The committed Postman environment keeps placeholder values for passwords. CI generates disposable local-only credentials at runtime, injects them into the temporary seed SQL outside the repository, and passes the same values to Newman. The Newman job must never point to production, staging, AWS RDS, or customer data.
 
 ## k6 Load Testing
 
