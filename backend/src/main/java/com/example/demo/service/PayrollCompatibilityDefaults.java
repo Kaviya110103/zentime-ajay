@@ -23,14 +23,14 @@ public final class PayrollCompatibilityDefaults {
 
     public static LocalTime resolveShiftStart(Employee employee) {
         if (employee != null) {
-            Optional<LocalTime> newColumnValue = parseFlexibleTime(employee.getShiftStart());
-            if (newColumnValue.isPresent()) {
-                return newColumnValue.get();
-            }
-
             Optional<LocalTime> legacyColumnValue = parseFlexibleTime(employee.getShiftStartTime());
             if (legacyColumnValue.isPresent()) {
                 return legacyColumnValue.get();
+            }
+
+            Optional<LocalTime> newColumnValue = parseFlexibleTime(employee.getShiftStart());
+            if (newColumnValue.isPresent()) {
+                return newColumnValue.get();
             }
         }
         return DEFAULT_SHIFT_START;
@@ -38,14 +38,14 @@ public final class PayrollCompatibilityDefaults {
 
     public static LocalTime resolveShiftEnd(Employee employee) {
         if (employee != null) {
-            Optional<LocalTime> newColumnValue = parseFlexibleTime(employee.getShiftEnd());
-            if (newColumnValue.isPresent()) {
-                return newColumnValue.get();
-            }
-
             Optional<LocalTime> legacyColumnValue = parseFlexibleTime(employee.getShiftEndTime());
             if (legacyColumnValue.isPresent()) {
                 return legacyColumnValue.get();
+            }
+
+            Optional<LocalTime> newColumnValue = parseFlexibleTime(employee.getShiftEnd());
+            if (newColumnValue.isPresent()) {
+                return newColumnValue.get();
             }
         }
         return DEFAULT_SHIFT_END;

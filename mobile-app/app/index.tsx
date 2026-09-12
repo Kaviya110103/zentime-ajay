@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useContext } from 'react';
-import { View, StyleSheet, Animated, BackHandler, Alert } from 'react-native';
+import { View, StyleSheet, Animated } from 'react-native';
 import { AppAnimatedText } from '../components/AppTypography';
 import { useRouter } from 'expo-router';
 import { EmployeeContext } from '../context/EmployeeContext'; // adjust path if needed
@@ -12,7 +12,7 @@ export default function Index() {
   const imageAnim = useRef(new Animated.Value(0)).current;
   const textAnim = useRef(new Animated.Value(0)).current;
   const router = useRouter();
-  const { employee, adminClient, sessionType, authReady } = useContext(EmployeeContext);
+  const { employee, authReady } = useContext(EmployeeContext);
   const { colors, isDark } = useAppTheme();
   // useEffect(() => {
   //   const backAction = () => {
@@ -47,9 +47,7 @@ export default function Index() {
 
     // Navigate after animation completes
     const timer = setTimeout(async () => {
-      if (sessionType === 'admin' && adminClient) {
-        router.replace('/AdminDashboard');
-      } else if (sessionType === 'employee' && employee) {
+      if (employee) {
         router.replace('/WelcomeBack');
       } else {
         const walkthroughCompleted = await AsyncStorage.getItem(WALKTHROUGH_DONE_KEY);
@@ -65,7 +63,7 @@ export default function Index() {
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [employee, adminClient, sessionType, authReady]);
+  }, [employee, authReady]);
 
   return (
     <View  //div

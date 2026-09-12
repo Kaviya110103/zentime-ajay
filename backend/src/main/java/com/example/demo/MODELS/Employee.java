@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
@@ -57,6 +58,7 @@ public class Employee {
 
 
     @Column(name = "password")
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
 
@@ -507,7 +509,6 @@ private LocalDateTime guestStartDate;
         this.additionalWorkingDays = additionalWorkingDays;
     }
 }
-
 
 
 

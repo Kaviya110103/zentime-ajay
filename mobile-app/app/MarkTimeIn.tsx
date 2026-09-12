@@ -54,6 +54,9 @@ export default function MarkTimeInScreen() {
               style={styles.permissionButton}
               onPress={requestPermission}
               activeOpacity={0.8}
+              testID="time-in-allow-camera"
+              accessibilityLabel="Allow Camera Access"
+              accessibilityRole="button"
             >
               <LinearGradient colors={['#351153', '#4a1a7a']} style={styles.permissionButtonGradient}>
                 <Text style={styles.permissionButtonText}>Allow Camera Access</Text>
@@ -214,6 +217,9 @@ export default function MarkTimeInScreen() {
             style={[styles.actionButton, styles.retakeButton]}
             onPress={() => setUri(null)}
             disabled={uploading}
+            testID="time-in-retake"
+            accessibilityLabel="Retake"
+            accessibilityRole="button"
           >
             <Feather name="refresh-ccw" size={20} color="#351153" />
             <Text style={styles.retakeButtonText}>Retake</Text>
@@ -223,6 +229,9 @@ export default function MarkTimeInScreen() {
             style={[styles.actionButton, uploading && styles.disabledButton]}
             onPress={uploadPhoto}
             disabled={uploading}
+            testID="time-in-upload"
+            accessibilityLabel="Upload time in photo"
+            accessibilityRole="button"
           >
             <LinearGradient
               colors={uploading ? ['#9CA3AF', '#6B7280'] : ['#351153', '#4a1a7a']}
@@ -283,6 +292,9 @@ export default function MarkTimeInScreen() {
               style={styles.shutterButton}
               onPress={takePicture}
               disabled={!cameraReady}
+              testID="time-in-shutter"
+              accessibilityLabel="Capture time in photo"
+              accessibilityRole="button"
             >
               <LinearGradient
                 colors={['#351153', '#4a1a7a']}

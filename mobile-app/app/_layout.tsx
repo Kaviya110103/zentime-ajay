@@ -16,6 +16,7 @@ import {
 } from '@expo/vector-icons';
 import { EmployeeProvider } from '../context/EmployeeContext';
 import { EmployeeContext } from '../context/EmployeeContext';
+import { AdminSessionProvider } from '../context/AdminSessionContext';
 import { useNotificationSetup } from '../useNotificationSetup';
 import { buildApiUrl } from '../lib/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -117,6 +118,11 @@ function LayoutContent() {
           <Stack.Screen name="EmployeeLogin" options={{ headerShown: false }} />
           <Stack.Screen name="AdminLogin" options={{ headerShown: false }} />
           <Stack.Screen name="AdminDashboard" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminEmployees" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminEmployeeDetails" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminAttendanceList" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminLeavePermissions" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminHolidays" options={{ headerShown: false }} />
           <Stack.Screen name="WelcomeBack" options={{ headerShown: false }} />
           <Stack.Screen name="MarkAttendance" options={{ headerShown: false }} />
           <Stack.Screen name="Calendarprinting" options={{ headerShown: false }} />
@@ -144,9 +150,11 @@ function LayoutContent() {
 export default function Layout() {
   return (
     <EmployeeProvider>
-      <AppThemeProvider>
-        <LayoutContent />
-      </AppThemeProvider>
+      <AdminSessionProvider>
+        <AppThemeProvider>
+          <LayoutContent />
+        </AppThemeProvider>
+      </AdminSessionProvider>
     </EmployeeProvider>
   );
 }

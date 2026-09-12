@@ -5,6 +5,7 @@ public class HolidayRequest {
     private String holidayDate;
     private String holidayName;
     private String holidayType;
+    private String branchScope;
 
     public Long getClientId() {
         return clientId;
@@ -36,5 +37,13 @@ public class HolidayRequest {
 
     public void setHolidayType(String holidayType) {
         this.holidayType = holidayType;
+    }
+
+    public String getBranchScope() {
+        return branchScope;
+    }
+
+    public void setBranchScope(String branchScope) {
+        this.branchScope = branchScope;
     }
 }

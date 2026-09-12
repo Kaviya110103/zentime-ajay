@@ -3,6 +3,8 @@ package com.example.demo.controller;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,9 +19,11 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
+import com.example.demo.logging.RequestLogContext;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(
@@ -117,6 +121,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleGeneric(
             Exception ex,
             HttpServletRequest request) {
+        LOGGER.error(
+                "event=UNHANDLED_EXCEPTION correlationId={} method={} uri={} clientId={} employeeId={} exceptionClass={} message={}",
+                RequestLogContext.correlationId(),
+                request == null ? null : request.getMethod(),
+                request == null ? null : RequestLogContext.sanitizePath(request.getRequestURI()),
+                request == null ? null : request.getParameter("clientId"),
+                request == null ? null : request.getParameter("employeeId"),
+                ex == null ? null : ex.getClass().getName(),
+                ex == null ? null : ex.getMessage(),
+                ex);
         return buildError(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Something went wrong. Please try again.",

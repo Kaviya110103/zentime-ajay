@@ -64,6 +64,9 @@ export default function MarkTimeOutScreen() {
               style={styles.permissionButton}
               onPress={requestPermission}
               activeOpacity={0.8}
+              testID="time-out-allow-camera"
+              accessibilityLabel="Allow Camera Access"
+              accessibilityRole="button"
             >
               <LinearGradient colors={['#351153', '#4a1a7a']} style={styles.permissionButtonGradient}>
                 <Text style={styles.permissionButtonText}>Allow Camera Access</Text>
@@ -291,6 +294,9 @@ export default function MarkTimeOutScreen() {
             style={[styles.actionButton, styles.retakeButton]}
             onPress={() => setUri(null)}
             disabled={uploading}
+            testID="time-out-retake"
+            accessibilityLabel="Retake"
+            accessibilityRole="button"
           >
             <Feather name="refresh-ccw" size={20} color="#351153" />
             <Text style={styles.retakeButtonText}>Retake</Text>
@@ -300,6 +306,9 @@ export default function MarkTimeOutScreen() {
             style={[styles.actionButton, uploading && styles.disabledButton]}
             onPress={uploadPhoto}
             disabled={uploading}
+            testID="time-out-upload"
+            accessibilityLabel="Upload time out photo"
+            accessibilityRole="button"
           >
             <LinearGradient
               colors={uploading ? ['#9CA3AF', '#6B7280'] : ['#351153', '#4a1a7a']}
@@ -360,6 +369,9 @@ export default function MarkTimeOutScreen() {
               style={styles.shutterButton}
               onPress={takePicture}
               disabled={!cameraReady}
+              testID="time-out-shutter"
+              accessibilityLabel="Capture time out photo"
+              accessibilityRole="button"
             >
               <LinearGradient
                 colors={['#351153', '#4a1a7a']}
@@ -389,6 +401,8 @@ export default function MarkTimeOutScreen() {
               placeholder="Enter overtime reason"
               multiline
               maxLength={500}
+              testID="time-out-overtime-reason"
+              accessibilityLabel="Overtime reason"
             />
             <View style={styles.reasonActions}>
               <TouchableOpacity style={styles.reasonCancel} onPress={() => closeReasonModal(null)}>
@@ -398,6 +412,9 @@ export default function MarkTimeOutScreen() {
                 style={[styles.reasonSubmit, !overtimeReason.trim() && styles.disabledButton]}
                 disabled={!overtimeReason.trim()}
                 onPress={() => closeReasonModal(overtimeReason.trim())}
+                testID="time-out-overtime-reason-submit"
+                accessibilityLabel="Submit overtime reason"
+                accessibilityRole="button"
               >
                 <Text style={styles.reasonSubmitText}>Submit</Text>
               </TouchableOpacity>

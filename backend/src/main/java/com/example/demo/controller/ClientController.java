@@ -9,6 +9,8 @@ import java.util.Optional;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestHeader;
 
 import com.example.demo.MODELS.BranchNamesRequest;
 import com.example.demo.MODELS.Client;
@@ -30,6 +33,7 @@ import jakarta.validation.Valid;
 @RestController
 @RequestMapping(value = "/api/clients", produces = MediaType.APPLICATION_JSON_VALUE)
 public class ClientController {
+    private static final Logger log = LoggerFactory.getLogger(ClientController.class);
 
     private final ClientService clientService;
     private final PasswordEncoder passwordEncoder;
@@ -164,34 +168,71 @@ public class ClientController {
     @PostMapping(path = "/login",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ClientResponse> login(@RequestBody ClientLoginRequest req) {
+    public ResponseEntity<ClientResponse> login(@RequestBody ClientLoginRequest req,
+                                                @RequestHeader(value = "X-Login-Trace-Id", required = false) String incomingTraceId) {
+        long totalStart = System.nanoTime();
+        String traceId = incomingTraceId != null && !incomingTraceId.isBlank()
+                ? incomingTraceId.trim()
+                : java.util.UUID.randomUUID().toString().substring(0, 8);
         String username = req.getUsername() != null ? req.getUsername().trim() : null;
+        log.info("client-login-timing traceId={} event=request-entry username={}", traceId, maskLogin(username));
 
         if (username == null || username.isBlank()
                 || req.getPassword() == null || req.getPassword().isBlank()) {
+            log.info("client-login-timing traceId={} event=validation-failed totalMs={}", traceId, elapsedMs(totalStart));
             return ResponseEntity.badRequest().build();
         }
 
+        long lookupStart = System.nanoTime();
         Optional<Client> clientOpt = clientService.findLoginClient(username);
+        log.info("client-login-timing traceId={} event=db-lookup-done found={} lookupMs={}",
+                traceId, clientOpt.isPresent(), elapsedMs(lookupStart));
         if (clientOpt.isEmpty()) {
+            log.info("client-login-timing traceId={} event=not-found totalMs={}", traceId, elapsedMs(totalStart));
             return ResponseEntity.status(401).build();
         }
 
         Client client = clientOpt.get();
         String storedPassword = client.getPassword();
+        long passwordStart = System.nanoTime();
         boolean hashMatch = storedPassword != null && passwordEncoder.matches(req.getPassword(), storedPassword);
         boolean plainMatch = storedPassword != null && req.getPassword().equals(storedPassword);
+        log.info("client-login-timing traceId={} event=password-check-done hashMatch={} plainMatch={} passwordMs={}",
+                traceId, hashMatch, plainMatch, elapsedMs(passwordStart));
 
         if (!hashMatch && !plainMatch) {
+            log.info("client-login-timing traceId={} event=invalid-password totalMs={}", traceId, elapsedMs(totalStart));
             return ResponseEntity.status(401).build();
         }
 
         if (plainMatch) {
+            long rehashStart = System.nanoTime();
             client.setPassword(passwordEncoder.encode(req.getPassword()));
             clientService.save(client);
+            log.info("client-login-timing traceId={} event=plain-password-rehash-done rehashSaveMs={}",
+                    traceId, elapsedMs(rehashStart));
         }
 
-        return ResponseEntity.ok(ClientResponse.fromEntity(client));
+        long responseStart = System.nanoTime();
+        ClientResponse response = ClientResponse.fromEntity(client);
+        log.info("client-login-timing traceId={} event=response-created responseMs={} totalMs={} clientId={}",
+                traceId, elapsedMs(responseStart), elapsedMs(totalStart), client.getId());
+        return ResponseEntity.ok(response);
+    }
+
+    private static long elapsedMs(long startNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+    }
+
+    private static String maskLogin(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 2) {
+            return "**";
+        }
+        return trimmed.charAt(0) + "***" + trimmed.charAt(trimmed.length() - 1);
     }
 
     @GetMapping(path = "", consumes = MediaType.ALL_VALUE)

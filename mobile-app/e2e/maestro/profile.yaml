@@ -1,0 +1,37 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- tapOn:
+    id: "bottom-nav-profile"
+    optional: true
+- assertVisible: "Employee Profile"
+- assertNotVisible:
+    text: "\\$2a\\$|\\$2b\\$|\\$2y\\$"
+- tapOn:
+    id: "profile-menu-button"
+- tapOn:
+    id: "profile-edit-toggle"
+- assertVisible:
+    text: "Save Changes"
+    optional: true
+- tapOn:
+    id: "profile-input-firstName"
+    optional: true
+- eraseText
+- tapOn:
+    id: "profile-edit-cancel"
+    optional: true
+- assertVisible: "Employee Profile"

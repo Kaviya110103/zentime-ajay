@@ -51,6 +51,7 @@ import com.example.demo.service.EmployeeService;
 import com.example.demo.service.EmployeeProfileImageStorageService;
 import com.example.demo.service.PushNotificationService;
 import com.example.demo.tenant.TenantContext;
+import com.example.demo.logging.RequestLogContext;
 import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
@@ -817,6 +818,7 @@ public class EmployeeController {
 
     @PostMapping("/login")
     public ResponseEntity<Object> loginEmployee(@RequestBody Map<String, String> loginData) {
+        long started = System.nanoTime();
         String username = loginData.get("username");
         String rawPassword = loginData.get("password");
         String companyCode = loginData.get("companyCode");
@@ -829,15 +831,21 @@ public class EmployeeController {
             companyCode = companyCode.trim();
         }
         if (rawPassword == null || rawPassword.isBlank() || username == null || username.isBlank()) {
+            logger.warn("event=LOGIN_FAILED correlationId={} reason=MISSING_CREDENTIALS username={} companyCode={} status=401 durationMs={}",
+                    RequestLogContext.correlationId(), username, companyCode, 0);
             return ResponseEntity.status(401).body(Map.of("error", "Invalid username or password"));
         }
 
-        logger.info("Login attempt - Username: {}, companyCode: {}", username, companyCode);
+        logger.info("event=LOGIN_ATTEMPT correlationId={} username={} companyCode={}",
+                RequestLogContext.correlationId(), username, companyCode);
 
         String tenantDb = resolveTenantDbByCompanyCode(companyCode);
         if (tenantDb != null && !tenantDb.isBlank()) {
             TenantContext.setTenantDb(tenantDb);
             schemaMaintenanceService.ensureEmployeeSchema();
+        } else if (companyCode != null && !companyCode.isBlank()) {
+            logger.warn("event=TENANT_NOT_FOUND correlationId={} username={} companyCode={} status=401 durationMs={}",
+                    RequestLogContext.correlationId(), username, companyCode, elapsedMs(started));
         }
 
         try {
@@ -855,48 +863,80 @@ public class EmployeeController {
                     if (plainMatch) {
                         employee.setPassword(passwordEncoder.encode(rawPassword));
                         employeeRepository.save(employee);
-                        logger.info("Upgraded plain password to hash for user: {}", username);
+                        logger.info("event=LEGACY_PASSWORD_UPGRADED correlationId={} employeeId={} clientId={} username={} tenantDb={}",
+                                RequestLogContext.correlationId(), employee.getId(), employee.getClientId(), username, tenantDb);
                     }
-                    logger.info("Login successful for user: {}", username);
                     if (pushToken != null && !pushToken.isBlank()) {
                         pushNotificationService.registerToken(employee, pushToken);
                     }
                     pushNotificationService.notifyLogin(employee);
-                    return ResponseEntity.ok(employee);
+                    logger.info("event=LOGIN_SUCCESS correlationId={} employeeId={} clientId={} username={} companyCode={} tenantDb={} status=200 durationMs={}",
+                            RequestLogContext.correlationId(),
+                            employee.getId(),
+                            employee.getClientId(),
+                            username,
+                            companyCode,
+                            tenantDb,
+                            elapsedMs(started));
+                    return employeeLoginResponse(employee);
                 }
-                logger.warn("Invalid password for user: {}", username);
+                logger.warn("event=INVALID_PASSWORD correlationId={} employeeId={} clientId={} username={} companyCode={} tenantDb={} status=401 durationMs={}",
+                        RequestLogContext.correlationId(),
+                        employee.getId(),
+                        employee.getClientId(),
+                        username,
+                        companyCode,
+                        tenantDb,
+                        elapsedMs(started));
             } else {
-                logger.warn("User not found: {}", username);
-            }
-            // Fallback to master only when tenant user is NOT found.
-            // Never fallback on password mismatch, otherwise old password can still pass.
-            if (tenantDb != null && !tenantDb.isBlank() && !tenantUserFound) {
-                TenantContext.clear();
-                Optional<Employee> masterEmployeeOptional = employeeRepository.findFirstByUsernameIgnoreCase(username);
-                if (masterEmployeeOptional.isPresent()) {
-                    Employee employee = masterEmployeeOptional.get();
-                    String storedPassword = employee.getPassword();
-                    boolean hashMatch = storedPassword != null && passwordEncoder.matches(rawPassword, storedPassword);
-                    boolean plainMatch = storedPassword != null && rawPassword.equals(storedPassword);
-                    if (hashMatch || plainMatch) {
-                        if (plainMatch) {
-                            employee.setPassword(passwordEncoder.encode(rawPassword));
-                            employeeRepository.save(employee);
-                        }
-                        if (pushToken != null && !pushToken.isBlank()) {
-                            pushNotificationService.registerToken(employee, pushToken);
-                        }
-                        pushNotificationService.notifyLogin(employee);
-                        logger.info("Login successful from master fallback for user: {}", username);
-                        return ResponseEntity.ok(employee);
-                    }
-                }
+                logger.warn("event=EMPLOYEE_NOT_FOUND correlationId={} username={} companyCode={} tenantDb={} tenantUserFound={} status=401 durationMs={}",
+                        RequestLogContext.correlationId(), username, companyCode, tenantDb, tenantUserFound, elapsedMs(started));
             }
 
             return ResponseEntity.status(401).body(Map.of("error", "Invalid username or password"));
         } finally {
             TenantContext.clear();
         }
+    }
+
+    private ResponseEntity<Object> employeeLoginResponse(Employee employee) {
+        Employee response = new Employee();
+        response.setId(employee.getId());
+        response.setFirstName(employee.getFirstName());
+        response.setLastName(employee.getLastName());
+        response.setMobile(employee.getMobile());
+        response.setGender(employee.getGender());
+        response.setPosition(employee.getPosition());
+        response.setBranch(employee.getBranch());
+        response.setUsername(employee.getUsername());
+        response.setDob(employee.getDob());
+        response.setEmail(employee.getEmail());
+        response.setProfileImage(employee.getProfileImage());
+        response.setAddress(employee.getAddress());
+        response.setAlternativeMobile(employee.getAlternativeMobile());
+        response.setDateOfJoining(employee.getDateOfJoining());
+        response.setResetToken(employee.getResetToken());
+        response.setSalary(employee.getSalary());
+        response.setWeekOff(employee.getWeekOff());
+        response.setShiftStartTime(employee.getShiftStartTime());
+        response.setShiftEndTime(employee.getShiftEndTime());
+        response.setShiftStart(employee.getShiftStart());
+        response.setShiftEnd(employee.getShiftEnd());
+        response.setLeavePolicyType(employee.getLeavePolicyType());
+        response.setCasualLeaveBalance(employee.getCasualLeaveBalance());
+        response.setPermissionAllowancePerMonth(employee.getPermissionAllowancePerMonth());
+        response.setPermissionHoursAllowed(employee.getPermissionHoursAllowed());
+        response.setAdditionalWorkingDaysConfig(employee.getAdditionalWorkingDaysConfig());
+        response.setCompanyCode(employee.getCompanyCode());
+        response.setEmployeeCode(employee.getEmployeeCode());
+        response.setGuestName(employee.getGuestName());
+        response.setGuestStartDate(employee.getGuestStartDate());
+        response.setClientId(employee.getClientId());
+        return ResponseEntity.ok(response);
+    }
+
+    private long elapsedMs(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
     }
 
     @PostMapping("/{id}/push-token")

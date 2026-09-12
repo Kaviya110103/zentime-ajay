@@ -1,0 +1,37 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Welcome back|Status|Calendar|Report|Home"
+    optional: true
+- stopApp
+- launchApp
+- assertVisible:
+    text: "Welcome back|Go to Dashboard|Status|Calendar|Report|Home"
+    optional: true
+- tapOn:
+    id: "employee-login-go-dashboard"
+    optional: true
+- assertVisible:
+    text: "Status|Calendar|Report|Home"
+    optional: true
+- tapOn:
+    id: "bottom-nav-logout"
+    optional: true
+- assertVisible: "Employee Login"
+- stopApp
+- launchApp
+- assertVisible: "Employee Login"

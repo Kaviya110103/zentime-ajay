@@ -1,0 +1,240 @@
+name: ZenTime QA CI
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - qa-testing
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SPRING_PROFILES_ACTIVE: test
+      DB_URL: jdbc:tc:mysql:8.0.36:///zentime_ci
+      DB_USERNAME: test
+      DB_PASSWORD: test
+      PUSH_ENABLED: "false"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Ensure Maven wrapper is executable
+        run: chmod +x ./mvnw
+
+      - name: Run backend unit and integration tests
+        run: ./mvnw -B test
+
+  admin-build:
+    name: Admin Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build admin frontend
+        env:
+          CI: "false"
+        run: npm run build
+
+  mobile-check:
+    name: Mobile TypeScript and Expo Config
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile-app
+    env:
+      EXPO_PUBLIC_API_BASE_URL: http://localhost:5001
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Validate Expo public config
+        run: npx expo config --type public
+
+  newman-regression:
+    name: Newman API Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0.36
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: zentime_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      SPRING_PROFILES_ACTIVE: ci
+      DB_URL: jdbc:mysql://127.0.0.1:3306/zentime_ci?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Kolkata
+      DB_USERNAME: root
+      DB_PASSWORD: ""
+      DDL_AUTO: create-drop
+      PUSH_ENABLED: "false"
+      PORT: "5001"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install MySQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Ensure Maven wrapper is executable
+        working-directory: backend
+        run: chmod +x ./mvnw
+
+      - name: Generate disposable QA credentials
+        run: |
+          echo "QA_EMPLOYEE_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "QA_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Start CI backend
+        working-directory: backend
+        run: |
+          nohup ./mvnw -B spring-boot:run > ../backend-ci.log 2>&1 &
+          echo $! > ../backend-ci.pid
+
+      - name: Wait for CI backend
+        run: |
+          for i in {1..90}; do
+            code=$(curl -s -o /tmp/zentime-ready.out -w "%{http_code}" "http://127.0.0.1:5001/api/attendance-records/search?clientId=999999&limit=1" || true)
+            if [ "$code" != "000" ]; then
+              echo "Backend is reachable with HTTP $code"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become reachable"
+          tail -n 200 backend-ci.log || true
+          exit 1
+
+      - name: Seed disposable Newman QA data
+        run: |
+          sed \
+            -e "s/__QA_EMPLOYEE_PASSWORD__/${QA_EMPLOYEE_PASSWORD}/g" \
+            -e "s/__QA_ADMIN_PASSWORD__/${QA_ADMIN_PASSWORD}/g" \
+            qa/postman/scripts/seed-ci-newman.sql > "$RUNNER_TEMP/seed-ci-newman.sql"
+          mysql -h127.0.0.1 -uroot zentime_ci < "$RUNNER_TEMP/seed-ci-newman.sql"
+
+      - name: Run Newman regression
+        run: |
+          npx --yes newman@6.2.1 run qa/postman/zentime-regression.postman_collection.json \
+            -e qa/postman/environments/qa-testing.postman_environment.json \
+            --env-var baseUrl=http://127.0.0.1:5001 \
+            --env-var clientId=1 \
+            --env-var companyCode=QA001 \
+            --env-var employeeId=1 \
+            --env-var employeeUsername=qa.employee \
+            --env-var employeePassword="${QA_EMPLOYEE_PASSWORD}" \
+            --env-var adminUsername=qaadmin \
+            --env-var adminPassword="${QA_ADMIN_PASSWORD}" \
+            --env-var testDate=2026-09-09 \
+            --env-var testMonth=9 \
+            --env-var testYear=2026 \
+            --env-var attendanceRecordId=1 \
+            --env-var noTimeInRecordId=2 \
+            --env-var wrongClientId=999999 \
+            --reporters cli
+
+      - name: Stop CI backend
+        if: always()
+        run: |
+          if [ -f backend-ci.pid ]; then
+            kill "$(cat backend-ci.pid)" || true
+          fi
+
+      - name: Print backend log on failure
+        if: failure()
+        run: tail -n 250 backend-ci.log || true
+
+  qa-gate:
+    name: QA Gate
+    runs-on: ubuntu-latest
+    needs:
+      - backend-tests
+      - admin-build
+      - mobile-check
+      - newman-regression
+    if: always()
+    steps:
+      - name: Check required QA jobs
+        run: |
+          if [ "${{ needs.backend-tests.result }}" != "success" ]; then
+            echo "backend-tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.admin-build.result }}" != "success" ]; then
+            echo "admin-build failed"
+            exit 1
+          fi
+          if [ "${{ needs.mobile-check.result }}" != "success" ]; then
+            echo "mobile-check failed"
+            exit 1
+          fi
+          if [ "${{ needs.newman-regression.result }}" != "success" ]; then
+            echo "newman-regression failed"
+            exit 1
+          fi
+          echo "QA gate passed"

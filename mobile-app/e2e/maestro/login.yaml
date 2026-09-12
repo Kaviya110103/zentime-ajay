@@ -1,0 +1,50 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Please enter both username and password.*"
+    optional: true
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: "wrong-password"
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Invalid.*|Login Failed|Network error"
+    optional: true
+- tapOn:
+    id: "employee-login-password"
+- eraseText
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Welcome back|Status|Calendar|Report|Home"
+    optional: true
+- tapOn:
+    id: "bottom-nav-logout"
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Welcome back|Status|Calendar|Report|Home"
+    optional: true

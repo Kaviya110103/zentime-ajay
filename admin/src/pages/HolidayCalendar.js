@@ -16,9 +16,12 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import { DatePicker, LocalizationProvider } from "@mui/x-date-pickers";
+import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
 import { addDays, addMonths, endOfMonth, endOfWeek, format, isSameMonth, parseISO, startOfMonth, startOfWeek } from "date-fns";
 import "./HolidayCalendar.css";
 import { API_BASE_URL } from "../config/api";
+import { fetchBranchesFromLocationSet } from "../utils/branchSource";
 
 const FALLBACK_ORIGIN = API_BASE_URL;
 
@@ -30,12 +33,14 @@ export default function HolidayCalendar() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
   const [holidays, setHolidays] = useState([]);
+  const [branches, setBranches] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingHoliday, setEditingHoliday] = useState(null);
   const [form, setForm] = useState({
     holidayDate: "",
     holidayName: "",
     holidayType: "FULL",
+    branchScope: "ALL",
   });
   const [snackbar, setSnackbar] = useState({
     open: false,
@@ -91,6 +96,27 @@ export default function HolidayCalendar() {
     fetchHolidays();
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const fetchBranches = async () => {
+      if (!client?.id) {
+        if (active) setBranches([]);
+        return;
+      }
+      try {
+        const names = await fetchBranchesFromLocationSet(client.id);
+        if (active) setBranches(names);
+      } catch (error) {
+        console.error("Failed to load branches", error);
+        if (active) setBranches([]);
+      }
+    };
+    fetchBranches();
+    return () => {
+      active = false;
+    };
+  }, [client?.id]);
+
   const handlePrevMonth = () => {
     setCurrentMonth(addMonths(currentMonth, -1));
   };
@@ -109,6 +135,7 @@ export default function HolidayCalendar() {
         holidayDate: existing.holidayDate,
         holidayName: existing.holidayName || "",
         holidayType: existing.holidayType || "FULL",
+        branchScope: existing.branchScope || "ALL",
       });
     } else {
       setEditingHoliday(null);
@@ -116,6 +143,7 @@ export default function HolidayCalendar() {
         holidayDate: dateKey,
         holidayName: "",
         holidayType: "FULL",
+        branchScope: "ALL",
       });
     }
     setDialogOpen(true);
@@ -128,6 +156,7 @@ export default function HolidayCalendar() {
       holidayDate: "",
       holidayName: "",
       holidayType: "FULL",
+      branchScope: "ALL",
     });
   };
 
@@ -150,6 +179,7 @@ export default function HolidayCalendar() {
       holidayDate: form.holidayDate,
       holidayName: form.holidayName.trim(),
       holidayType: form.holidayType,
+      branchScope: form.branchScope || "ALL",
     };
 
     try {
@@ -308,6 +338,7 @@ export default function HolidayCalendar() {
               <span>Date</span>
               <span>Holiday Name</span>
               <span>Type</span>
+              <span>Branch</span>
               <span>Action</span>
             </div>
             {monthHolidayList.map((holiday) => (
@@ -315,6 +346,7 @@ export default function HolidayCalendar() {
                 <span>{format(new Date(holiday.holidayDate), "dd-MM-yyyy")}</span>
                 <span>{holiday.holidayName}</span>
                 <span>{holiday.holidayType === "HALF" ? "Half Day" : "Full Day"}</span>
+                <span>{holiday.branchScope && holiday.branchScope !== "ALL" ? holiday.branchScope : "All Branches"}</span>
                 <Button
                   size="small"
                   variant="outlined"
@@ -333,24 +365,26 @@ export default function HolidayCalendar() {
           {editingHoliday ? "Edit Holiday" : "Add Holiday"}
         </DialogTitle>
         <DialogContent className="holiday-dialog-content">
-          <TextField
-            label="Selected Date"
-            fullWidth
-            margin="dense"
-            value={formattedSelectedDate}
-            InputProps={{ readOnly: true }}
-          />
-          <TextField
-            label="Holiday Date"
-            type="date"
-            fullWidth
-            margin="dense"
-            value={form.holidayDate}
-            onChange={(e) =>
-              setForm((prev) => ({ ...prev, holidayDate: e.target.value }))
-            }
-            InputLabelProps={{ shrink: true }}
-          />
+          <LocalizationProvider dateAdapter={AdapterDateFns}>
+            <DatePicker
+              label="Holiday Date"
+              value={form.holidayDate ? parseISO(form.holidayDate) : null}
+              onChange={(value) =>
+                setForm((prev) => ({
+                  ...prev,
+                  holidayDate: value ? format(value, "yyyy-MM-dd") : "",
+                }))
+              }
+              slotProps={{
+                textField: {
+                  fullWidth: true,
+                  margin: "dense",
+                  helperText: formattedSelectedDate ? `Selected: ${formattedSelectedDate}` : "Select a date",
+                  InputProps: { readOnly: true },
+                },
+              }}
+            />
+          </LocalizationProvider>
           <TextField
             label="Holiday Name"
             fullWidth
@@ -371,6 +405,23 @@ export default function HolidayCalendar() {
             >
               <MenuItem value="FULL">Full Day</MenuItem>
               <MenuItem value="HALF">Half Day</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl fullWidth margin="dense">
+            <InputLabel>Branch</InputLabel>
+            <Select
+              label="Branch"
+              value={form.branchScope || "ALL"}
+              onChange={(e) =>
+                setForm((prev) => ({ ...prev, branchScope: e.target.value }))
+              }
+            >
+              <MenuItem value="ALL">All Branches</MenuItem>
+              {branches.map((branch) => (
+                <MenuItem key={branch} value={branch}>
+                  {branch}
+                </MenuItem>
+              ))}
             </Select>
           </FormControl>
         </DialogContent>

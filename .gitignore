@@ -2,10 +2,13 @@
 **/node_modules/
 **/target/
 **/build/
+**/builds/
 **/dist/
+**/dist-test/
 **/.expo/
 **/.gradle/
 **/coverage/
+**/eas-archive/
 
 # Local configuration and credentials
 **/.env
@@ -25,6 +28,11 @@
 **/*.war
 **/*.apk
 **/*.aab
+**/production-deploy/
+qa/tools/
+qa/k6/results/
+qa/k6/data/*.local.json
+backend/src/main/resources/application-qa.properties
 
 # IDE and OS files
 **/.idea/

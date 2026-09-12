@@ -1,6 +1,5 @@
 package com.example.demo.service;
 
-import com.example.demo.MODELS.AdditionalWorkingDayType;
 import com.example.demo.MODELS.AttendanceRecord;
 import com.example.demo.MODELS.Employee;
 import com.example.demo.MODELS.EmployeeAdditionalWorkingDay;
@@ -8,7 +7,6 @@ import com.example.demo.MODELS.Holiday;
 import com.example.demo.repo.HolidayRepository;
 import org.springframework.stereotype.Service;
 
-import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -17,7 +15,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +22,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,12 +33,15 @@ public class AttendanceClassificationService {
 
     private final AdditionalWorkingDayService additionalWorkingDayService;
     private final HolidayRepository holidayRepository;
+    private final ShiftResolverService shiftResolverService;
 
     public AttendanceClassificationService(
             AdditionalWorkingDayService additionalWorkingDayService,
-            HolidayRepository holidayRepository) {
+            HolidayRepository holidayRepository,
+            ShiftResolverService shiftResolverService) {
         this.additionalWorkingDayService = additionalWorkingDayService;
         this.holidayRepository = holidayRepository;
+        this.shiftResolverService = shiftResolverService;
     }
 
     public List<Map<String, Object>> classifyRecordMaps(List<Map<String, Object>> records, Long clientId) {
@@ -122,17 +121,16 @@ public class AttendanceClassificationService {
                 .filter(Objects::nonNull)
                 .toList();
 
-        Set<LocalDate> holidays = Set.of();
+        Map<LocalDate, List<Holiday>> holidaysByDate = Map.of();
         if (clientId != null && !dates.isEmpty()) {
             LocalDate start = dates.stream().min(Comparator.naturalOrder()).orElse(null);
             LocalDate end = dates.stream().max(Comparator.naturalOrder()).orElse(null);
             if (start != null && end != null) {
-                holidays = holidayRepository
+                holidaysByDate = holidayRepository
                         .findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(clientId, start, end)
                         .stream()
-                        .map(Holiday::getHolidayDate)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toSet());
+                        .filter(holiday -> holiday.getHolidayDate() != null)
+                        .collect(Collectors.groupingBy(Holiday::getHolidayDate));
             }
         }
 
@@ -146,7 +144,7 @@ public class AttendanceClassificationService {
                         ? additionalWorkingDayService.findUniqueEntitiesByEmployeeIds(employeeIds)
                         : preloadedAdditionalWorkingDays;
 
-        return new BatchContext(holidays, additionalByEmployee);
+        return new BatchContext(holidaysByDate, additionalByEmployee);
     }
 
     @SuppressWarnings("unchecked")
@@ -177,21 +175,24 @@ public class AttendanceClassificationService {
             employee.put("additionalWorkingDays", additionalPayload);
         }
 
-        EmployeeAdditionalWorkingDay additionalDay = resolveAdditionalWorkingDay(recordDate, additionalRows);
-        boolean holiday = recordDate != null && context.holidayDates().contains(recordDate);
-        boolean policyWeekOff = isPolicyWeekOff(recordDate, employee);
-        boolean weekend = recordDate != null
-                && (recordDate.getDayOfWeek() == DayOfWeek.SATURDAY
-                || recordDate.getDayOfWeek() == DayOfWeek.SUNDAY);
-        boolean scheduledAdditionalWork = additionalDay != null;
-        boolean effectiveWeekOff = policyWeekOff && !scheduledAdditionalWork;
+        List<Holiday> dateHolidays = recordDate == null
+                ? List.of()
+                : context.holidaysByDate().getOrDefault(recordDate, List.of());
+        ShiftResolverService.ShiftResolution shiftWindow = shiftResolverService.resolveWithSnapshot(
+                source,
+                employee,
+                recordDate,
+                dateHolidays,
+                additionalRows);
+        boolean holiday = shiftWindow.holiday();
+        boolean scheduledAdditionalWork = shiftWindow.additionalWorkingDay();
+        boolean effectiveWeekOff = shiftWindow.weekOff();
+        boolean scheduledWorkingDay = shiftWindow.scheduledWorkingDay();
         boolean nonWorkingDisplayDay = holiday || effectiveWeekOff;
-
-        ShiftWindow shiftWindow = resolveShiftWindow(employee, additionalDay, holiday, policyWeekOff, weekend);
         int workedMinutes = calculateWorkedMinutes(source, timeIn, timeOut);
         int lateMinutes = calculateLateMinutes(shiftWindow, timeIn);
         int earlyOutMinutes = calculateEarlyOutMinutes(shiftWindow, timeOut);
-        int calculatedMissedMinutes = shiftWindow.minutes() > 0 && hasPunch
+        int calculatedMissedMinutes = shiftWindow.expectedMinutes() > 0 && hasPunch
                 ? lateMinutes + earlyOutMinutes
                 : Math.max(0, number(source.get("missedTimes")));
 
@@ -214,7 +215,7 @@ public class AttendanceClassificationService {
             displayStatus = "Half Day";
         } else if (leave) {
             displayStatus = "Leave";
-        } else if (absent || (scheduledAdditionalWork && !hasPunch)) {
+        } else if (absent || (scheduledWorkingDay && !hasPunch)) {
             displayStatus = "Absent";
         } else {
             displayStatus = rawStatus.isBlank() ? "-" : rawStatus;
@@ -231,7 +232,7 @@ public class AttendanceClassificationService {
             countStatus = "Half Day";
         } else if (leave) {
             countStatus = "Leave";
-        } else if (scheduledAdditionalWork) {
+        } else if (scheduledWorkingDay) {
             countStatus = "Absent";
         } else if (absent) {
             countStatus = "Absent";
@@ -256,9 +257,11 @@ public class AttendanceClassificationService {
         record.put("holiday", holiday);
         record.put("weekOff", effectiveWeekOff);
         record.put("additionalWorkingDay", scheduledAdditionalWork);
-        record.put("expectedShiftStart", shiftWindow.startText());
-        record.put("expectedShiftEnd", shiftWindow.endText());
-        record.put("expectedMinutes", shiftWindow.minutes());
+        record.put("scheduledWorkingDay", scheduledWorkingDay);
+        record.put("shiftSource", shiftWindow.shiftSource());
+        record.put("expectedShiftStart", shiftWindow.expectedShiftStartText());
+        record.put("expectedShiftEnd", shiftWindow.expectedShiftEndText());
+        record.put("expectedMinutes", shiftWindow.expectedMinutes());
         record.put("workedMinutes", workedMinutes);
         record.put("lateMinutes", lateMinutes);
         record.put("earlyOutMinutes", earlyOutMinutes);
@@ -282,6 +285,10 @@ public class AttendanceClassificationService {
         record.put("overtime", source.getOvertime());
         record.put("permissionUsed", source.getPermissionUsed());
         record.put("shiftId", source.getShiftId());
+        record.put("expectedShiftStart", source.getExpectedShiftStart());
+        record.put("expectedShiftEnd", source.getExpectedShiftEnd());
+        record.put("expectedMinutes", source.getExpectedMinutes());
+        record.put("shiftSource", source.getShiftSource());
 
         Employee employeeSource = source.getEmployee();
         record.put("employeeId", employeeSource == null ? null : employeeSource.getId());
@@ -314,88 +321,6 @@ public class AttendanceClassificationService {
         item.put("timeIn", day.getTimeIn());
         item.put("timeOut", day.getTimeOut());
         return item;
-    }
-
-    private ShiftWindow resolveShiftWindow(
-            Map<String, Object> employee,
-            EmployeeAdditionalWorkingDay additionalDay,
-            boolean holiday,
-            boolean policyWeekOff,
-            boolean weekend) {
-        if (additionalDay != null) {
-            Optional<LocalTime> start = parseTime(additionalDay.getTimeIn());
-            Optional<LocalTime> end = parseTime(additionalDay.getTimeOut());
-            if (start.isPresent() && end.isPresent() && end.get().isAfter(start.get())) {
-                return ShiftWindow.of(start.get(), end.get());
-            }
-        }
-        if (holiday || policyWeekOff || weekend) {
-            return ShiftWindow.empty();
-        }
-        Optional<LocalTime> start = parseTime(text(employee.get("shiftStartTime")))
-                .or(() -> parseTime(text(employee.get("shiftStart"))))
-                .or(() -> Optional.of(PayrollCompatibilityDefaults.DEFAULT_SHIFT_START));
-        Optional<LocalTime> end = parseTime(text(employee.get("shiftEndTime")))
-                .or(() -> parseTime(text(employee.get("shiftEnd"))))
-                .or(() -> Optional.of(PayrollCompatibilityDefaults.DEFAULT_SHIFT_END));
-        if (start.isPresent() && end.isPresent() && end.get().isAfter(start.get())) {
-            return ShiftWindow.of(start.get(), end.get());
-        }
-        return ShiftWindow.empty();
-    }
-
-    private boolean isPolicyWeekOff(LocalDate date, Map<String, Object> employee) {
-        if (date == null || employee == null) {
-            return false;
-        }
-        DayOfWeek day = date.getDayOfWeek();
-        String leavePolicy = normalize(text(employee.get("leavePolicyType")));
-        String weekOff = normalize(text(employee.get("weekOff")));
-        if (leavePolicy.contains("weekend")
-                || (leavePolicy.contains("saturday") && leavePolicy.contains("sunday"))
-                || (weekOff.contains("saturday") && weekOff.contains("sunday"))) {
-            return day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY;
-        }
-        DayOfWeek configured = parseDayOfWeek(text(employee.get("weekOff")));
-        return configured != null && configured == day;
-    }
-
-    private EmployeeAdditionalWorkingDay resolveAdditionalWorkingDay(
-            LocalDate date,
-            List<EmployeeAdditionalWorkingDay> rows) {
-        if (date == null || rows == null || rows.isEmpty()) {
-            return null;
-        }
-        AdditionalWorkingDayType type = additionalWorkingType(date);
-        if (type == null) {
-            return null;
-        }
-        Map<AdditionalWorkingDayType, EmployeeAdditionalWorkingDay> byType =
-                new EnumMap<>(AdditionalWorkingDayType.class);
-        for (EmployeeAdditionalWorkingDay row : rows) {
-            if (row != null && row.getDayType() != null) {
-                byType.putIfAbsent(row.getDayType(), row);
-            }
-        }
-        return byType.get(type);
-    }
-
-    private AdditionalWorkingDayType additionalWorkingType(LocalDate date) {
-        DayOfWeek day = date.getDayOfWeek();
-        if (day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY) {
-            return null;
-        }
-        int occurrence = 0;
-        for (LocalDate cursor = date.withDayOfMonth(1); !cursor.isAfter(date); cursor = cursor.plusDays(1)) {
-            if (cursor.getDayOfWeek() == day) {
-                occurrence++;
-            }
-        }
-        boolean odd = occurrence % 2 == 1;
-        if (day == DayOfWeek.SATURDAY) {
-            return odd ? AdditionalWorkingDayType.ODD_SATURDAY : AdditionalWorkingDayType.EVEN_SATURDAY;
-        }
-        return odd ? AdditionalWorkingDayType.ODD_SUNDAY : AdditionalWorkingDayType.EVEN_SUNDAY;
     }
 
     private LocalDate resolveRecordDate(Map<String, Object> record) {
@@ -434,18 +359,24 @@ public class AttendanceClassificationService {
         return (int) Duration.between(timeIn, timeOut).toMinutes();
     }
 
-    private int calculateLateMinutes(ShiftWindow window, LocalDateTime timeIn) {
-        if (window.minutes() <= 0 || timeIn == null || !timeIn.toLocalTime().isAfter(window.start())) {
+    private int calculateLateMinutes(ShiftResolverService.ShiftResolution window, LocalDateTime timeIn) {
+        if (window.expectedMinutes() <= 0
+                || window.expectedShiftStart() == null
+                || timeIn == null
+                || !timeIn.toLocalTime().isAfter(window.expectedShiftStart())) {
             return 0;
         }
-        return (int) Duration.between(window.start(), timeIn.toLocalTime()).toMinutes();
+        return (int) Duration.between(window.expectedShiftStart(), timeIn.toLocalTime()).toMinutes();
     }
 
-    private int calculateEarlyOutMinutes(ShiftWindow window, LocalDateTime timeOut) {
-        if (window.minutes() <= 0 || timeOut == null || !timeOut.toLocalTime().isBefore(window.end())) {
+    private int calculateEarlyOutMinutes(ShiftResolverService.ShiftResolution window, LocalDateTime timeOut) {
+        if (window.expectedMinutes() <= 0
+                || window.expectedShiftEnd() == null
+                || timeOut == null
+                || !timeOut.toLocalTime().isBefore(window.expectedShiftEnd())) {
             return 0;
         }
-        return (int) Duration.between(timeOut.toLocalTime(), window.end()).toMinutes();
+        return (int) Duration.between(timeOut.toLocalTime(), window.expectedShiftEnd()).toMinutes();
     }
 
     private int calculatePayableMinutes(String countStatus, int workedMinutes, int lateMinutes) {
@@ -515,26 +446,6 @@ public class AttendanceClassificationService {
         return Optional.empty();
     }
 
-    private DayOfWeek parseDayOfWeek(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        String normalized = raw.trim().toUpperCase(Locale.ROOT);
-        if (normalized.length() >= 3) {
-            normalized = normalized.substring(0, 3);
-        }
-        return switch (normalized) {
-            case "MON" -> DayOfWeek.MONDAY;
-            case "TUE" -> DayOfWeek.TUESDAY;
-            case "WED" -> DayOfWeek.WEDNESDAY;
-            case "THU" -> DayOfWeek.THURSDAY;
-            case "FRI" -> DayOfWeek.FRIDAY;
-            case "SAT" -> DayOfWeek.SATURDAY;
-            case "SUN" -> DayOfWeek.SUNDAY;
-            default -> null;
-        };
-    }
-
     private String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replaceAll("[\\s_-]+", "");
     }
@@ -580,25 +491,7 @@ public class AttendanceClassificationService {
     }
 
     private record BatchContext(
-            Set<LocalDate> holidayDates,
+            Map<LocalDate, List<Holiday>> holidaysByDate,
             Map<Long, List<EmployeeAdditionalWorkingDay>> additionalWorkingDaysByEmployeeId) {
-    }
-
-    private record ShiftWindow(LocalTime start, LocalTime end, int minutes) {
-        static ShiftWindow of(LocalTime start, LocalTime end) {
-            return new ShiftWindow(start, end, Math.max(0, (int) Duration.between(start, end).toMinutes()));
-        }
-
-        static ShiftWindow empty() {
-            return new ShiftWindow(null, null, 0);
-        }
-
-        String startText() {
-            return start == null ? null : start.format(TIME_HH_MM);
-        }
-
-        String endText() {
-            return end == null ? null : end.format(TIME_HH_MM);
-        }
     }
 }

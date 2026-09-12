@@ -64,6 +64,18 @@ public class AttendanceRecord {
     @Column(name = "shift_id", nullable = true)
     private String shiftId;
 
+    @Column(name = "expected_shift_start", nullable = true)
+    private String expectedShiftStart;
+
+    @Column(name = "expected_shift_end", nullable = true)
+    private String expectedShiftEnd;
+
+    @Column(name = "expected_minutes", nullable = true)
+    private Integer expectedMinutes;
+
+    @Column(name = "shift_source", nullable = true)
+    private String shiftSource;
+
     private Boolean overtimeApproved = false;
     private Boolean overtimeRequested = false;
     public AttendanceRecord(Integer missedtimes, String attendancelocation) {
@@ -153,6 +165,38 @@ public class AttendanceRecord {
 
     public void setShiftId(String shiftId) {
         this.shiftId = shiftId;
+    }
+
+    public String getExpectedShiftStart() {
+        return expectedShiftStart;
+    }
+
+    public void setExpectedShiftStart(String expectedShiftStart) {
+        this.expectedShiftStart = expectedShiftStart;
+    }
+
+    public String getExpectedShiftEnd() {
+        return expectedShiftEnd;
+    }
+
+    public void setExpectedShiftEnd(String expectedShiftEnd) {
+        this.expectedShiftEnd = expectedShiftEnd;
+    }
+
+    public Integer getExpectedMinutes() {
+        return expectedMinutes;
+    }
+
+    public void setExpectedMinutes(Integer expectedMinutes) {
+        this.expectedMinutes = expectedMinutes;
+    }
+
+    public String getShiftSource() {
+        return shiftSource;
+    }
+
+    public void setShiftSource(String shiftSource) {
+        this.shiftSource = shiftSource;
     }
 
     public Boolean getOvertimeApproved() {

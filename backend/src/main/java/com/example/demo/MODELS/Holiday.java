@@ -14,7 +14,7 @@ import jakarta.persistence.UniqueConstraint;
 @Table(
         name = "holidays",
         uniqueConstraints = {
-                @UniqueConstraint(columnNames = {"client_id", "holiday_date"})
+                @UniqueConstraint(columnNames = {"client_id", "holiday_date", "branch_scope"})
         })
 public class Holiday {
 
@@ -33,6 +33,9 @@ public class Holiday {
 
     @Column(name = "holiday_type", nullable = false)
     private String holidayType = "FULL";
+
+    @Column(name = "branch_scope", nullable = false)
+    private String branchScope = "ALL";
 
     public Long getId() {
         return id;
@@ -68,5 +71,13 @@ public class Holiday {
 
     public void setHolidayType(String holidayType) {
         this.holidayType = holidayType;
+    }
+
+    public String getBranchScope() {
+        return branchScope;
+    }
+
+    public void setBranchScope(String branchScope) {
+        this.branchScope = branchScope;
     }
 }

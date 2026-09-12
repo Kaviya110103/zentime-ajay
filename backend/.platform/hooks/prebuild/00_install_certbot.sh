@@ -17,9 +17,7 @@ load_eb_env() {
 
 load_eb_env
 if [[ "${AUTO_SSL_ENABLED:-true}" != "true" ]]; then
-  echo "AUTO_SSL_ENABLED was ${AUTO_SSL_ENABLED}; forcing true for SSL deployment package."
-  AUTO_SSL_ENABLED=true
-  export AUTO_SSL_ENABLED
+  echo "AUTO_SSL_ENABLED=${AUTO_SSL_ENABLED}; skipping certbot installation."
 fi
 
 echo "AUTO_SSL_ENABLED=${AUTO_SSL_ENABLED:-true}"

@@ -25,11 +25,12 @@ export const useNotificationSetup = () => {
         }
 
         if (Platform.OS === 'android') {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'default',
+          await Notifications.setNotificationChannelAsync('zentime', {
+            name: 'Zentime Notifications',
             importance: Notifications.AndroidImportance.MAX,
             vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#FF231F7C',
+            lightColor: '#351153',
+            lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
           });
         }
 

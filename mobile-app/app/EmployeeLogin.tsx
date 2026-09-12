@@ -125,11 +125,17 @@ const EmployeeLogin = () => {
 
       if (response.ok) {
         if (data && data.id) {
-          await AsyncStorage.setItem(WALKTHROUGH_DONE_KEY, 'true');
           await setEmployee(data);
-          await notifyEmployeeLogin(data);
+          void AsyncStorage.setItem(WALKTHROUGH_DONE_KEY, 'true').catch((storageError) => {
+            console.warn("[EmployeeLogin] Failed to persist walkthrough state", storageError);
+          });
           showMessage("Login successful!", "#16A34A");
           router.replace("/WelcomeBack");
+          setTimeout(() => {
+            void notifyEmployeeLogin(data).catch((notificationError) => {
+              console.warn("[EmployeeLogin] Login notification setup failed", notificationError);
+            });
+          }, 0);
         } else {
           if (!silent) showInvalidCredentialsAlert();
         }
@@ -180,14 +186,10 @@ const EmployeeLogin = () => {
     setMessage("");
   };
 
-  const handleOpenAdminLogin = () => {
-    router.push("/AdminLogin");
-  };
-
   if (isLoading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <ActivityIndicator size="large" color={colors.primary} testID="employee-login-loading" />
       </View>
     );
   }
@@ -214,14 +216,18 @@ const EmployeeLogin = () => {
                 <TouchableOpacity
                   style={[styles.loginButton, { backgroundColor: colors.primary }]}
                   onPress={() => router.replace("/MarkAttendance")}
+                  testID="employee-login-go-dashboard"
+                  accessibilityLabel="Go to Dashboard"
                 >
                   <Text style={styles.buttonText}>Go to Dashboard</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleLogout}>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { borderColor: colors.primary }]}
+                  onPress={handleLogout}
+                  testID="employee-login-logout"
+                  accessibilityLabel="Logout"
+                >
                   <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Logout</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleOpenAdminLogin}>
-                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Login as Admin</Text>
                 </TouchableOpacity>
                 {message ? (
                   <Text style={[styles.message, { color: messageColor }]}>{message}</Text>
@@ -238,6 +244,8 @@ const EmployeeLogin = () => {
                   autoCorrect={false}
                   placeholder="Enter your username"
                   placeholderTextColor={placeholderColor}
+                  testID="employee-login-username"
+                  accessibilityLabel="Employee username"
                 />
 
                 <Text style={[styles.label, { color: colors.mutedText }]}>Password*</Text>
@@ -252,6 +260,8 @@ const EmployeeLogin = () => {
                     textContentType="password"
                     placeholder="Enter your password"
                     placeholderTextColor={placeholderColor}
+                    testID="employee-login-password"
+                    accessibilityLabel="Employee password"
                   />
                   <TouchableOpacity
                     style={styles.showPasswordButton}
@@ -273,6 +283,8 @@ const EmployeeLogin = () => {
                     autoCorrect={false}
                     placeholder="Enter your company code"
                     placeholderTextColor={placeholderColor}
+                    testID="employee-login-company-code"
+                    accessibilityLabel="Company code"
                   />
                 </View>
 
@@ -280,16 +292,30 @@ const EmployeeLogin = () => {
                   style={[styles.loginButton, { backgroundColor: colors.primary }, isLoading && { opacity: 0.7 }]}
                   onPress={() => handleLogin()}
                   disabled={isLoading}
+                  testID="employee-login-submit"
+                  accessibilityLabel="Employee login"
                 >
                   <Text style={styles.buttonText}>LOGIN</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.secondaryButton, { borderColor: colors.primary }]} onPress={handleOpenAdminLogin}>
-                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Login as Admin</Text>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { borderColor: colors.primary }]}
+                  onPress={() => router.push("/AdminLogin")}
+                  disabled={isLoading}
+                  testID="employee-login-admin-login"
+                  accessibilityLabel="Admin Login"
+                >
+                  <Text style={[styles.secondaryButtonText, { color: colors.primary }]}>Admin Login</Text>
                 </TouchableOpacity>
 
                 {message ? (
-                  <Text style={[styles.message, { color: messageColor }]}>{message}</Text>
+                  <Text
+                    style={[styles.message, { color: messageColor }]}
+                    testID="employee-login-message"
+                    accessibilityLabel="Login message"
+                  >
+                    {message}
+                  </Text>
                 ) : null}
               </View>
             )}

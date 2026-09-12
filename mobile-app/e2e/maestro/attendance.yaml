@@ -1,0 +1,58 @@
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Employee Login"
+- tapOn:
+    id: "employee-login-username"
+- inputText: ${QA_EMPLOYEE_USERNAME}
+- tapOn:
+    id: "employee-login-password"
+- inputText: ${QA_EMPLOYEE_PASSWORD}
+- tapOn:
+    id: "employee-login-company-code"
+- inputText: ${QA_COMPANY_CODE}
+- tapOn:
+    id: "employee-login-submit"
+- assertVisible:
+    text: "Status|Calendar|Report|Home|Start Day|Clock In|Clock Out"
+    optional: true
+- tapOn:
+    id: "attendance-primary-action"
+    optional: true
+- assertVisible:
+    text: "Start Day|Clock In|Clock Out|Holiday|Day"
+    optional: true
+- tapOn:
+    id: "attendance-start-day-button"
+    optional: true
+- assertVisible:
+    text: "Confirm Start Day|Submit Location Request|Camera Access Required|Clock In"
+    optional: true
+- tapOn:
+    id: "attendance-confirm-start-day"
+    optional: true
+- assertVisible:
+    text: "Clock In|Camera Access Required|Allow Camera Access|Start Day"
+    optional: true
+- tapOn:
+    id: "time-in-allow-camera"
+    optional: true
+- tapOn:
+    id: "time-in-shutter"
+    optional: true
+- assertVisible:
+    text: "Upload|Retake|Verify Your Attendance"
+    optional: true
+- tapOn:
+    id: "time-in-upload"
+    optional: true
+- assertVisible:
+    text: "Clock Out|Upload failed|Timeout|Error|Home"
+    optional: true
+- tapOn:
+    id: "attendance-primary-action"
+    optional: true
+- assertVisible:
+    text: "Clock Out|Camera Access Required|Upload|Retake|Error"
+    optional: true

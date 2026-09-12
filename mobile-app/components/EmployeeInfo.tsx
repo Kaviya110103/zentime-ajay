@@ -275,8 +275,20 @@ type EmployeeInfoProps = {
 };
 
 const EmployeeInfo: React.FC<EmployeeInfoProps> = ({ employeeId }) => {
-  const [employees, setEmployees] = useState<Employee | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const { employee, logout } = useContext(EmployeeContext);
+  const [employees, setEmployees] = useState<Employee | null>(() => {
+    if (!employee) return null;
+    return {
+      id: Number(employee.id),
+      username: String(employee.username || employee.firstName || '').trim(),
+      firstName: employee.firstName ? String(employee.firstName) : undefined,
+      lastName: employee.lastName ? String(employee.lastName) : undefined,
+      name: employee.name ? String(employee.name) : undefined,
+      position: employee.position ? String(employee.position) : undefined,
+      profileImage: employee.profileImage ? String(employee.profileImage) : undefined,
+    };
+  });
+  const [loading, setLoading] = useState<boolean>(!employee);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [formattedDate, setFormattedDate] = useState<string>('');
@@ -285,7 +297,6 @@ const EmployeeInfo: React.FC<EmployeeInfoProps> = ({ employeeId }) => {
   const [menuVisible, setMenuVisible] = useState(false);
   const drawerTranslateX = useRef(new Animated.Value(-330)).current;
   const router = useRouter();
-  const { employee, logout } = useContext(EmployeeContext);
   const companyCode = employee?.companyCode;
   const clientId = employee?.clientId;
   useEffect(() => {
@@ -309,8 +320,13 @@ const EmployeeInfo: React.FC<EmployeeInfoProps> = ({ employeeId }) => {
       }
     };
 
-    fetchEmployee();
-  }, [employeeId, clientId]);
+    if (!employees || !employees.position || !employees.profileImage) {
+      fetchEmployee();
+      return;
+    }
+
+    setLoading(false);
+  }, [employeeId, clientId, employees]);
 
   useEffect(() => {
     const updateTime = () => {

@@ -16,14 +16,21 @@ type BottomNavItemProps = {
   label: string;
   active: boolean;
   onPress: () => void;
+  testID: string;
 };
 
-const BottomNavItem: React.FC<BottomNavItemProps> = ({ icon, label, active, onPress }) => {
+const BottomNavItem: React.FC<BottomNavItemProps> = ({ icon, label, active, onPress, testID }) => {
   const { isDark } = useAppTheme();
   const inactiveColor = isDark ? '#c4b5fd' : '#D9B3FF';
 
   return (
-  <TouchableOpacity style={styles.navItem} onPress={onPress}>
+  <TouchableOpacity
+    style={styles.navItem}
+    onPress={onPress}
+    testID={testID}
+    accessibilityLabel={label}
+    accessibilityRole="button"
+  >
     {React.cloneElement(icon, {
       size: 20,
       color: active ? 'white' : inactiveColor,
@@ -59,6 +66,7 @@ const BottomNavigation: React.FC<BottomNavBarProps> = ({ activeTab }) => {
         label="Home"
         active={activeTab === 'Home'}
         onPress={() => router.push('/MarkAttendance')}
+        testID="bottom-nav-home"
       />
       <BottomNavItem
         icon={<FontAwesome5 name="bus" />}
@@ -72,12 +80,14 @@ const BottomNavigation: React.FC<BottomNavBarProps> = ({ activeTab }) => {
             });
           }
         }}
+        testID="bottom-nav-leave"
       />
       <BottomNavItem
         icon={<FontAwesome5 name="user" />}
         label="Profile"
         active={activeTab === 'Profile'}
         onPress={() => router.push('/EmployeeProfile')}
+        testID="bottom-nav-profile"
       />
       <BottomNavItem
         icon={<FontAwesome5 name="clipboard" />}
@@ -91,6 +101,7 @@ const BottomNavigation: React.FC<BottomNavBarProps> = ({ activeTab }) => {
             });
           }
         }}
+        testID="bottom-nav-permission"
       />
       <BottomNavItem
         icon={<FontAwesome5 name="sign-out-alt" />}
@@ -100,6 +111,7 @@ const BottomNavigation: React.FC<BottomNavBarProps> = ({ activeTab }) => {
           await logout();
           router.replace('/EmployeeLogin');
         }}
+        testID="bottom-nav-logout"
       />
     </View>
   );

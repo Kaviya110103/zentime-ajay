@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Dimensions, Image, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { AppText as Text, AppTextInput as TextInput } from '../components/AppTypography';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -61,6 +61,9 @@ const Employee = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<Employee>>({});
+  const formInitializedRef = useRef(false);
+  const isEditingRef = useRef(false);
+  const savingRef = useRef(false);
   const { employee, setEmployee, logout } = useContext(EmployeeContext);
   const { colors, isDark } = useAppTheme();
   const companyCode = employee?.companyCode;
@@ -75,6 +78,18 @@ const Employee = () => {
     }
   }, [employeeId, router]);
 
+  useEffect(() => {
+    formInitializedRef.current = false;
+  }, [employeeId]);
+
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  useEffect(() => {
+    savingRef.current = saving;
+  }, [saving]);
+
   const fetchAdditionalWorkingDays = useCallback(async () => {
     if (!employeeId) return [];
     const response = await fetch(buildApiUrl(`/api/employees/${employeeId}/additional-working-days`, { clientId }));
@@ -85,12 +100,12 @@ const Employee = () => {
     return Array.isArray(data) ? data : [];
   }, [employeeId, clientId]);
 
-  const fetchEmployeeData = useCallback(async () => {
+  const fetchEmployeeData = useCallback(async (options?: { forceFormSync?: boolean }) => {
     if (!employeeId) return;
 
     try {
       setError(null);
-      if (!employee) {
+      if (!formInitializedRef.current) {
         setLoading(true);
       }
       const response = await fetch(buildApiUrl(`/api/employees/${employeeId}`, { clientId }));
@@ -105,17 +120,23 @@ const Employee = () => {
         additionalWorkingDays,
       };
       setEmployee(employeeData);
-      setFormData((prev) => ({
-        ...(employeeData as Partial<Employee>),
-        password: prev.password ?? "",
-      }));
+      const shouldSyncForm =
+        options?.forceFormSync ||
+        (!formInitializedRef.current && !isEditingRef.current && !savingRef.current);
+      if (shouldSyncForm) {
+        setFormData({
+          ...(employeeData as Partial<Employee>),
+          password: "",
+        });
+        formInitializedRef.current = true;
+      }
       setLoading(false);
     } catch (err: any) {
       setError(err.message);
       setLoading(false);
       Alert.alert("Error", "Failed to fetch employee data");
     }
-  }, [employeeId, clientId, setEmployee, employee, fetchAdditionalWorkingDays]);
+  }, [employeeId, clientId, setEmployee, fetchAdditionalWorkingDays]);
 
   useFocusEffect(
     useCallback(() => {
@@ -129,17 +150,24 @@ const Employee = () => {
   };
 
   const handleInputChange = useCallback((field: keyof Employee, value: string) => {
-    setFormData(prev => {
-      let fieldValue: any = value;
-      if (field === "salary" || field === "casualLeaveBalance") {
-        fieldValue = value === "" ? null : Number(value);
-      }
-      return {
-        ...prev,
-        [field]: fieldValue
-      };
-    });
+    setFormData(prev => ({
+      ...prev,
+      [field]: value,
+    }));
   }, []);
+
+  const normalizeNumberField = (value: unknown): number | null => {
+    if (value === null || value === undefined || String(value).trim() === "") {
+      return null;
+    }
+    const parsed = Number(String(value).trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const normalizeIntegerField = (value: unknown): number | null => {
+    const parsed = normalizeNumberField(value);
+    return parsed === null ? null : Math.trunc(parsed);
+  };
 
   const handleSave = useCallback(async () => {
     if (!employeeId || !companyCode) return;
@@ -164,9 +192,14 @@ const Employee = () => {
         }
       }
 
-      const payload: Partial<Employee> = { ...formData };
+      const payload: Partial<Employee> = {
+        ...formData,
+        salary: normalizeNumberField(formData.salary) as any,
+        casualLeaveBalance: normalizeIntegerField(formData.casualLeaveBalance) as any,
+      };
       // Password is updated through dedicated endpoint to avoid silent misses.
       delete payload.password;
+      delete payload.additionalWorkingDays;
 
       const response = await fetch(buildApiUrl(`/api/employees/update/${employeeId}`, { clientId }), {
         method: "PUT",
@@ -179,7 +212,7 @@ const Employee = () => {
         throw new Error(errorText || `Profile update failed. status: ${response.status}`);
       }
 
-      const updatedEmployee = await response.json();
+      let updatedEmployee = await response.json();
 
       if (requestedNewPassword) {
         const changePasswordResponse = await fetch(
@@ -212,9 +245,15 @@ const Employee = () => {
             const errText = await changePasswordResponse.text();
             throw new Error(errText || `Password change failed. status: ${changePasswordResponse.status}`);
           }
-        }
+          }
       }
 
+      const refreshedResponse = await fetch(buildApiUrl(`/api/employees/${employeeId}`, { clientId }));
+      if (refreshedResponse.ok) {
+        updatedEmployee = await refreshedResponse.json();
+      }
+
+      formInitializedRef.current = true;
       setEmployee(updatedEmployee);
       setFormData({
         ...(updatedEmployee as Partial<Employee>),
@@ -237,6 +276,7 @@ const Employee = () => {
         ...(employee as unknown as Partial<Employee>),
         password: "",
       });
+      formInitializedRef.current = true;
     }
     setIsEditing(!isEditing);
     setMenuVisible(false);
@@ -249,6 +289,7 @@ const Employee = () => {
         ...(employee as unknown as Partial<Employee>),
         password: "",
       });
+      formInitializedRef.current = true;
     }
     setIsEditing(false);
   }, [employee]);
@@ -384,6 +425,9 @@ const Employee = () => {
           <TouchableOpacity
             style={styles.menuButton}
             onPress={() => setMenuVisible(true)}
+            testID="profile-menu-button"
+            accessibilityLabel="Profile menu"
+            accessibilityRole="button"
           >
             <Ionicons name="menu" size={24} color="#ffffff" />
           </TouchableOpacity>
@@ -403,7 +447,13 @@ const Employee = () => {
           >
             <View style={[styles.modalContainer, isDesktop && styles.desktopModalContainer]}>
               <View style={[styles.modalContent, { backgroundColor: colors.surface, borderColor: colors.border }, isDesktop && styles.desktopModalContent]}>
-                <TouchableOpacity style={styles.menuItem} onPress={toggleEditMode}>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={toggleEditMode}
+                  testID="profile-edit-toggle"
+                  accessibilityLabel={isEditing ? "Cancel Editing" : "Edit Profile"}
+                  accessibilityRole="button"
+                >
                   <Ionicons name={isEditing ? "close" : "create"} size={20} color={colors.mutedText} />
                   <Text style={[styles.menuItemText, { color: colors.text }]}>
                     {isEditing ? "Cancel Editing" : "Edit Profile"}
@@ -413,12 +463,18 @@ const Employee = () => {
                 <TouchableOpacity style={styles.menuItem} onPress={() => {
                   setMenuVisible(false);
                   router.push("/MarkAttendance");
-                }}>
+                }} testID="profile-menu-mark-attendance" accessibilityLabel="Mark Attendance" accessibilityRole="button">
                   <Ionicons name="calendar" size={20} color={colors.mutedText} />
                   <Text style={[styles.menuItemText, { color: colors.text }]}>Mark Attendance</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={[styles.menuItem, styles.logoutMenuItem]} onPress={handleLogout}>
+                <TouchableOpacity
+                  style={[styles.menuItem, styles.logoutMenuItem]}
+                  onPress={handleLogout}
+                  testID="profile-menu-logout"
+                  accessibilityLabel="Logout"
+                  accessibilityRole="button"
+                >
                   <Ionicons name="log-out" size={20} color="#ef4444" />
                   <Text style={[styles.menuItemText, styles.logoutText]}>Logout</Text>
                 </TouchableOpacity>
@@ -711,6 +767,7 @@ const Employee = () => {
                   label="Password"
                   field="password"
                   value={formData.password || ""}
+                  secureTextEntry
                   onChangeText={handleInputChange}
                 />
                 <InfoRow
@@ -781,6 +838,9 @@ const Employee = () => {
                 style={[styles.actionButton, styles.cancelButton]} 
                 onPress={handleCancel}
                 disabled={saving}
+                testID="profile-edit-cancel"
+                accessibilityLabel="Cancel profile changes"
+                accessibilityRole="button"
               >
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -788,6 +848,9 @@ const Employee = () => {
                 style={[styles.actionButton, styles.saveButton]} 
                 onPress={handleSave}
                 disabled={saving}
+                testID="profile-edit-save"
+                accessibilityLabel="Save Changes"
+                accessibilityRole="button"
               >
                 {saving ? (
                   <ActivityIndicator size="small" color="#ffffff" />
@@ -842,9 +905,11 @@ const EditableInfoRow = React.memo<{
   field: keyof Employee;
   value: string | number | null;
   keyboardType?: string;
+  secureTextEntry?: boolean;
   onChangeText: (field: keyof Employee, value: string) => void;
-}>(({ icon, label, field, value, keyboardType = "default", onChangeText }) => {
+}>(({ icon, label, field, value, keyboardType = "default", secureTextEntry = false, onChangeText }) => {
   const { colors, isDark } = useAppTheme();
+  const inputValue = value === null || value === undefined ? "" : String(value);
   return (
     <View style={styles.editableInfoRow}>
       <View style={styles.infoLabel}>
@@ -853,13 +918,20 @@ const EditableInfoRow = React.memo<{
       </View>
       <TextInput
         style={[styles.editInput, { backgroundColor: isDark ? '#0b1220' : '#f9fafb', borderColor: colors.border, color: colors.text }]}
-        value={value === null ? "" : String(value)}
+        value={inputValue}
         onChangeText={(text) => onChangeText(field, text)}
         keyboardType={keyboardType as any}
         placeholder={`Enter ${label.toLowerCase()}`}
         placeholderTextColor={colors.mutedText}
         autoCorrect={false}
         autoCapitalize="none"
+        secureTextEntry={secureTextEntry}
+        textAlign="left"
+        textAlignVertical="center"
+        underlineColorAndroid="transparent"
+        clearButtonMode="while-editing"
+        testID={`profile-input-${String(field)}`}
+        accessibilityLabel={`${label} input`}
       />
     </View>
   );
@@ -1005,16 +1077,15 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   editableInfoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "stretch",
     paddingVertical: 8,
   },
   editInput: {
-    flex: 1,
-    marginLeft: 12,
+    width: "100%",
+    minHeight: 44,
+    marginTop: 8,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: "#e5e7eb",
     borderRadius: 6,

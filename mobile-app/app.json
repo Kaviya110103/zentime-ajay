@@ -59,7 +59,14 @@
       "expo-router",
       "expo-font",
       "expo-web-browser",
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#351153",
+          "defaultChannel": "zentime"
+        }
+      ],
       [
         "expo-camera",
         {

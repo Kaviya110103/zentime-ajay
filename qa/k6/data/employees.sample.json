@@ -1,0 +1,20 @@
+[
+  {
+    "username": "qa.employee",
+    "companyCode": "QA001",
+    "clientId": 1,
+    "employeeId": 1
+  },
+  {
+    "username": "qa.employee2",
+    "companyCode": "QA001",
+    "clientId": 1,
+    "employeeId": 2
+  },
+  {
+    "username": "qa.employee3",
+    "companyCode": "QA001",
+    "clientId": 1,
+    "employeeId": 3
+  }
+]

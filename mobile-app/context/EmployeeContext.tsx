@@ -26,69 +26,36 @@ interface Employee {
   shiftEndTime?: string;
 }
 
-interface AdminClient {
-  id: number;
-  username?: string;
-  clientName?: string;
-  companyName?: string;
-  companyCode?: string;
-  employeeCount?: number;
-  emailAddress?: string;
-  mobileNumber?: string;
-  provisioningStatus?: string;
-}
-
 interface EmployeeContextType {
   employee: Employee | null;
-  adminClient: AdminClient | null;
-  sessionType: 'employee' | 'admin' | null;
   authReady: boolean;
   setEmployee: (emp: Employee | null) => Promise<void>;
-  setAdminClient: (admin: AdminClient | null) => Promise<void>;
   logout: () => Promise<void>;
 }
 
 export const EmployeeContext = createContext<EmployeeContextType>({
   employee: null,
-  adminClient: null,
-  sessionType: null,
   authReady: false,
   setEmployee: async () => {},
-  setAdminClient: async () => {},
   logout: async () => {},
 });
 
 export const EmployeeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [employee, setEmployeeState] = useState<Employee | null>(null);
-  const [adminClient, setAdminClientState] = useState<AdminClient | null>(null);
-  const [sessionType, setSessionType] = useState<'employee' | 'admin' | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
     const loadSession = async () => {
       try {
-        const [storedEmployee, storedAdminClient, storedSessionType] = await AsyncStorage.multiGet([
-          'employee',
-          'adminClient',
-          'sessionType',
-        ]);
+        const [storedEmployee] = await AsyncStorage.multiGet(['employee']);
         const employeeRaw = storedEmployee?.[1];
-        const adminRaw = storedAdminClient?.[1];
-        const storedType = storedSessionType?.[1];
 
-        if (storedType === 'admin' && adminRaw) {
-          setAdminClientState(JSON.parse(adminRaw));
-          setEmployeeState(null);
-          setSessionType('admin');
-        } else if (employeeRaw) {
+        if (employeeRaw) {
           setEmployeeState(JSON.parse(employeeRaw));
-          setAdminClientState(null);
-          setSessionType('employee');
         } else {
           setEmployeeState(null);
-          setAdminClientState(null);
-          setSessionType(null);
         }
+        await AsyncStorage.multiRemove(['adminClient', 'sessionType']);
       } finally {
         setAuthReady(true);
       }
@@ -98,53 +65,15 @@ export const EmployeeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setEmployee = useCallback(async (emp: Employee | null) => {
     if (emp) {
-      await AsyncStorage.multiSet([
-        ['employee', JSON.stringify(emp)],
-        ['sessionType', 'employee'],
-      ]);
-      await AsyncStorage.removeItem('adminClient');
-      setSessionType('employee');
-      setAdminClientState(null);
+      await AsyncStorage.setItem('employee', JSON.stringify(emp));
     } else {
       await AsyncStorage.removeItem('employee');
-      if (sessionType === 'employee') {
-        setSessionType(null);
-      }
     }
     setEmployeeState(emp);
-  }, [sessionType]);
-
-  const setAdminClient = useCallback(async (admin: AdminClient | null) => {
-    if (admin) {
-      setSessionType('admin');
-      setEmployeeState(null);
-      setAdminClientState(admin);
-      try {
-        await AsyncStorage.multiRemove(['employee', 'employeeCredentials']);
-        await AsyncStorage.multiSet([
-          ['adminClient', JSON.stringify(admin)],
-          ['sessionType', 'admin'],
-        ]);
-      } catch (error) {
-        console.warn('Failed to persist admin session:', error);
-      }
-    } else {
-      if (sessionType === 'admin') {
-        setSessionType(null);
-      }
-      setAdminClientState(null);
-      try {
-        await AsyncStorage.removeItem('adminClient');
-      } catch (error) {
-        console.warn('Failed to clear admin session:', error);
-      }
-    }
-  }, [sessionType]);
+  }, []);
 
   const logout = useCallback(async () => {
     setEmployeeState(null);
-    setAdminClientState(null);
-    setSessionType(null);
     try {
       await AsyncStorage.multiRemove(['employee', 'adminClient', 'sessionType', 'employeeCredentials']);
     } catch (error) {
@@ -153,8 +82,8 @@ export const EmployeeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   const contextValue = useMemo(
-    () => ({ employee, adminClient, sessionType, authReady, setEmployee, setAdminClient, logout }),
-    [employee, adminClient, sessionType, authReady, setEmployee, setAdminClient, logout]
+    () => ({ employee, authReady, setEmployee, logout }),
+    [employee, authReady, setEmployee, logout]
   );
 
   return (
