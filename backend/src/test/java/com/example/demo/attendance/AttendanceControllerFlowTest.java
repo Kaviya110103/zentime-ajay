@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +50,9 @@ class AttendanceControllerFlowTest {
     private EmployeeService employeeService;
     private ShiftResolverService shiftResolverService;
     private OvertimeRequestRepository overtimeRequestRepository;
+    private AttendanceClassificationService attendanceClassificationService;
+    private AdditionalWorkingDayService additionalWorkingDayService;
+    private RequestFilterService requestFilterService;
 
     @BeforeEach
     void setUp() {
@@ -58,14 +62,17 @@ class AttendanceControllerFlowTest {
         employeeService = mock(EmployeeService.class);
         shiftResolverService = mock(ShiftResolverService.class);
         overtimeRequestRepository = mock(OvertimeRequestRepository.class);
+        attendanceClassificationService = mock(AttendanceClassificationService.class);
+        additionalWorkingDayService = mock(AdditionalWorkingDayService.class);
+        requestFilterService = mock(RequestFilterService.class);
 
         ReflectionTestUtils.setField(controller, "employeeRepository", employeeRepository);
         ReflectionTestUtils.setField(controller, "employeeService", employeeService);
         ReflectionTestUtils.setField(controller, "leavePermissionRepository", mock(LeavePermissionRepository.class));
         ReflectionTestUtils.setField(controller, "attendanceMetricsService", mock(AttendanceMetricsService.class));
-        ReflectionTestUtils.setField(controller, "attendanceClassificationService", mock(AttendanceClassificationService.class));
-        ReflectionTestUtils.setField(controller, "additionalWorkingDayService", mock(AdditionalWorkingDayService.class));
-        ReflectionTestUtils.setField(controller, "requestFilterService", mock(RequestFilterService.class));
+        ReflectionTestUtils.setField(controller, "attendanceClassificationService", attendanceClassificationService);
+        ReflectionTestUtils.setField(controller, "additionalWorkingDayService", additionalWorkingDayService);
+        ReflectionTestUtils.setField(controller, "requestFilterService", requestFilterService);
         ReflectionTestUtils.setField(controller, "attendanceSchedulerService", mock(AttendanceSchedulerService.class));
         ReflectionTestUtils.setField(controller, "shiftResolverService", shiftResolverService);
         ReflectionTestUtils.setField(controller, "locationRepository", mock(LocationRepository.class));
@@ -213,6 +220,44 @@ class AttendanceControllerFlowTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(record.getTimeIn()).isNull();
         verify(attendanceRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void todayLateArrivalUsesClassifiedLateMinutesInsteadOfRawShiftCalculation() {
+        LocalDate today = LocalDate.now();
+        String todayDate = today.format(DB_DATE);
+        Object[] employeeRow = {
+                14L, "Test", "Employee", "Main", "QAEMP001", "Sunday", "9999999999",
+                "09:00", "18:00", null, null, null
+        };
+        Object[] attendanceRow = {
+                3253L, LocalDateTime.of(today, LocalTime.of(10, 15)), null, "", "Office",
+                "Present", todayDate, 75, 0.0, 0, 0, null,
+                14L, "Test", "Employee", "Main", "QAEMP001", "Sunday", "9999999999",
+                "09:00", "18:00", null, null, null
+        };
+        Map<String, Object> classifiedOnTime = Map.of(
+                "date", todayDate,
+                "employeeId", 14L,
+                "timeIn", LocalDateTime.of(today, LocalTime.of(10, 15)),
+                "attendanceStatus", "Present",
+                "countStatus", "Present",
+                "lateMinutes", 0,
+                "employee", Map.of("id", 14L, "firstName", "Test", "lastName", "Employee", "branch", "Main")
+        );
+
+        when(requestFilterService.normalizeBranch(null)).thenReturn(null);
+        when(employeeRepository.findDashboardEmployeeRows(1L, null)).thenReturn(List.<Object[]>of(employeeRow));
+        when(attendanceRecordRepository.findDashboardSummaryRowsByDatesAndClient(any(), any(), any()))
+                .thenReturn(List.<Object[]>of(attendanceRow));
+        when(additionalWorkingDayService.findUniqueEntitiesByEmployeeIds(any())).thenReturn(Map.of());
+        when(attendanceClassificationService.classifyRecordMaps(any(), any(), any()))
+                .thenReturn(List.of(classifiedOnTime));
+
+        ResponseEntity<List<Map<String, Object>>> response = controller.getTodayTimeInLateDetails(1L, null);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody()).isEmpty();
     }
 
     private Employee employee(Long id, Long clientId) {
