@@ -271,11 +271,17 @@ function AttendanceFilters() {
   };
 
   const getComputedMissedMinutes = (record) => {
+    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
+    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
+    if (hasLateMinutes || hasEarlyOutMinutes) {
+      return Math.max(
+        0,
+        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
+          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
+      );
+    }
     if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
       return Math.max(0, Number(record.calculatedMissedMinutes));
-    }
-    if (record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes))) {
-      return Math.max(0, getLateArrivalMinutes(record) + Number(record.earlyOutMinutes));
     }
     return Number(record?.missedTimes || 0);
   };
@@ -535,14 +541,17 @@ function AttendanceFilters() {
   }, [employeeDirectory, filters.branch]);
 
   const branchOptions = useMemo(() => {
-    const unique = new Set();
+    const unique = new Map();
     employeeDirectory.forEach((employee) => {
       const branch = String(employee?.branch || "").trim();
       if (branch) {
-        unique.add(branch);
+        const normalizedBranch = branch.toLowerCase();
+        if (!unique.has(normalizedBranch)) {
+          unique.set(normalizedBranch, branch);
+        }
       }
     });
-    return Array.from(unique).sort((left, right) => left.localeCompare(right));
+    return Array.from(unique.values()).sort((left, right) => left.localeCompare(right));
   }, [employeeDirectory]);
 
   const selectedEmployeeNameValue = useMemo(() => {

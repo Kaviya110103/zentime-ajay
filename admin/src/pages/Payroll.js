@@ -166,12 +166,17 @@ function EmployeePayrollViewer() {
   }, [employeeDirectory, selectedBranch]);
 
   const branchOptions = useMemo(() => {
-    const unique = new Set();
+    const unique = new Map();
     employeeDirectory.forEach((employee) => {
       const branch = String(employee?.branch || "").trim();
-      if (branch) unique.add(branch);
+      if (branch) {
+        const normalizedBranch = branch.toLowerCase();
+        if (!unique.has(normalizedBranch)) {
+          unique.set(normalizedBranch, branch);
+        }
+      }
     });
-    return Array.from(unique).sort((left, right) => left.localeCompare(right));
+    return Array.from(unique.values()).sort((left, right) => left.localeCompare(right));
   }, [employeeDirectory]);
 
   const selectedEmployeeNameValue = useMemo(() => {
@@ -465,12 +470,31 @@ function EmployeePayrollViewer() {
   };
 
   const getLateArrivalMinutes = (record) => {
+    if (record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes))) {
+      return Math.max(0, Number(record.lateMinutes));
+    }
     if (!record?.timeIn) return 0;
     const expectedMinutes = parseTimeToMinutes(getShiftStartForRecord(record));
     const clockInMinutes = parseTimeToMinutes(record.timeIn);
     if (expectedMinutes == null || clockInMinutes == null) return 0;
     const lateMinutes = clockInMinutes - expectedMinutes;
     return lateMinutes > 0 ? lateMinutes : 0;
+  };
+
+  const getComputedMissedMinutes = (record) => {
+    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
+    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
+    if (hasLateMinutes || hasEarlyOutMinutes) {
+      return Math.max(
+        0,
+        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
+          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
+      );
+    }
+    if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
+      return Math.max(0, Number(record.calculatedMissedMinutes));
+    }
+    return Math.max(0, Number(record?.missedTimes || 0));
   };
 
   const normalizeAttendancePayload = (payload) => {
@@ -2440,6 +2464,7 @@ function EmployeePayrollViewer() {
                           const statusBucket = getAttendanceStatusBucket(record);
                           const displayStatus = statusBucket || derivedStatus;
                           const lateArrivalMinutes = getLateArrivalMinutes(record);
+                          const missedMinutes = getComputedMissedMinutes(record);
                           const statusColor =
                             statusBucket === "Present"
                               ? "success"
@@ -2484,8 +2509,8 @@ function EmployeePayrollViewer() {
                               </TableCell>
                               <TableCell>
                                 <Chip
-                                  label={`${record.missedTimes || 0} min`}
-                                  color={record.missedTimes > 0 ? "error" : "success"}
+                                  label={`${missedMinutes} min`}
+                                  color={missedMinutes > 0 ? "error" : "success"}
                                   size="small"
                                   variant="outlined"
                                 />

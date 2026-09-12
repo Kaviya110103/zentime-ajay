@@ -1147,26 +1147,24 @@ public ResponseEntity<Long> getTodayAbsentCount(
 public ResponseEntity<List<Map<String, Object>>> getTodayTimeInLateDetails(
         @RequestParam(value = "clientId", required = false) Long clientId,
         @RequestParam(value = "branch", required = false) String branch) {
-    Map<Long, Map<String, Object>> uniqueRecords = new LinkedHashMap<>();
     String normalizedBranch = requestFilterService.normalizeBranch(branch);
-    for (String today : dateCandidates(LocalDate.now())) {
-        attendanceRecordRepository.findTodayPresentTimeInRowsByDateAndClientAndBranch(
-                        today,
-                        clientId,
-                        normalizedBranch,
-                        PageRequest.of(0, 200))
-                .forEach(row -> {
-                    Long attendanceId = asLong(row[0]);
-                    int lateMinutes = calculateLateMinutesFromRow(row);
-                    if (attendanceId != null && lateMinutes > 0) {
-                        Map<String, Object> item = toTodayTimeInMap(row);
-                        item.put("status", "Late");
-                        item.put("lateMinutes", lateMinutes);
-                        uniqueRecords.putIfAbsent(attendanceId, item);
-                    }
-                });
+    DashboardSummaryResult result = buildDashboardSummary(LocalDate.now(), clientId, normalizedBranch);
+    List<Map<String, Object>> lateRecords = new ArrayList<>();
+    for (Map<String, Object> record : result.classifiedRecords()) {
+        LocalDate recordDate = parseDashboardRecordDate(String.valueOf(record.getOrDefault("date", "")));
+        if (!result.summaryDate().equals(recordDate)) {
+            continue;
+        }
+        int lateMinutes = intValue(record.get("lateMinutes"));
+        if ("Present".equalsIgnoreCase(String.valueOf(record.getOrDefault("countStatus", "")))
+                && lateMinutes > 0) {
+            Map<String, Object> item = toTodayTimeInLateMap(record);
+            item.put("status", "Late");
+            item.put("lateMinutes", lateMinutes);
+            lateRecords.add(item);
+        }
     }
-    return ResponseEntity.ok(new ArrayList<>(uniqueRecords.values()));
+    return ResponseEntity.ok(lateRecords);
 }
 
 private int calculateLateMinutesFromRow(Object[] row) {
@@ -1178,6 +1176,30 @@ private int calculateLateMinutesFromRow(Object[] row) {
             .orElse(PayrollCompatibilityDefaults.DEFAULT_SHIFT_START);
     long minutes = Duration.between(shiftStart, timeIn.toLocalTime()).toMinutes();
     return minutes > 0 ? (int) minutes : 0;
+}
+
+private Map<String, Object> toTodayTimeInLateMap(Map<String, Object> classifiedRecord) {
+    Map<String, Object> employee = classifiedRecord.get("employee") instanceof Map<?, ?> employeeMap
+            ? new LinkedHashMap<>((Map<String, Object>) employeeMap)
+            : new LinkedHashMap<>();
+    String firstName = String.valueOf(employee.getOrDefault("firstName", "")).trim();
+    String lastName = String.valueOf(employee.getOrDefault("lastName", "")).trim();
+    String fullName = (firstName + " " + lastName).trim();
+
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("employeeId", employee.getOrDefault("id", classifiedRecord.get("employeeId")));
+    item.put("firstName", firstName);
+    item.put("lastName", lastName);
+    item.put("name", fullName.isBlank() ? firstName : fullName);
+    item.put("branch", employee.get("branch"));
+    item.put("mobile", employee.get("mobile"));
+    item.put("profileImage", employee.get("profileImage"));
+    item.put("timeIn", classifiedRecord.get("timeIn"));
+    item.put("timeOut", classifiedRecord.get("timeOut"));
+    item.put("locationIn", classifiedRecord.get("location"));
+    item.put("locationOut", classifiedRecord.get("location"));
+    item.put("hasCheckedOut", classifiedRecord.get("timeOut") != null);
+    return item;
 }
 @GetMapping("/late-arrivals")
 public ResponseEntity<List<Map<String, Object>>> getLateArrivalsByDate(@RequestParam String date) {
