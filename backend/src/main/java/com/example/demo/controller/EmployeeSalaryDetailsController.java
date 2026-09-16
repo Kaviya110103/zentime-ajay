@@ -37,6 +37,9 @@ public class EmployeeSalaryDetailsController {
     @Autowired
     private SchemaMaintenanceService schemaMaintenanceService;
 
+    @Autowired
+    private com.example.demo.service.PayrollCalculationService payrollCalculationService;
+
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @PostMapping("/calculate")
@@ -45,7 +48,11 @@ public class EmployeeSalaryDetailsController {
             @RequestParam(value = "clientId", required = false) Long clientId,
             @RequestParam String position,
             @RequestParam String branch,
-            @RequestParam Double salary,
+            @RequestParam(required = false) Double salary,
+            @RequestParam int month,
+            @RequestParam int year,
+            @RequestParam(defaultValue = "true") boolean includeOvertime,
+            @RequestParam(defaultValue = "false") boolean preview,
             @RequestParam(required = false, defaultValue = "0") Double convienceAmount,
             @RequestParam(required = false, defaultValue = "0") Double incentive,
             @RequestParam(required = false, defaultValue = "0") Double overTime,
@@ -63,11 +70,18 @@ public class EmployeeSalaryDetailsController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         Long resolvedEmployeeId = employeeOpt.get().getId();
+        var payroll = payrollCalculationService.calculateMonthlyPayroll(resolvedEmployeeId, month, year, clientId);
+        salary = payroll.estimatedNetSalary();
+        overTime = includeOvertime ? payroll.overtimeAmount().doubleValue() : 0.0;
+        // Attendance shortages are already deducted by the minute ledger.
+        if (lossOfPay != null && lossOfPay != 0) {
+            throw new IllegalArgumentException("Manual LOP is not supported; correct the attendance record instead");
+        }
 
         double resolvedAdditionalTotal = resolveAdditionalAllowancesTotal(
                 additionalAllowancesTotal,
                 additionalAllowancesJson);
-        double resolvedPfAmount = resolvePfAmount(salary, pfAmount, pfPercentage);
+        double resolvedPfAmount = resolvePfAmount(payroll.basicSalary(), pfAmount, pfPercentage);
         double normalizedSalary = roundCurrency(salary == null ? 0.0 : salary);
         double normalizedConvenience = roundCurrency(convienceAmount == null ? 0.0 : convienceAmount);
         double normalizedIncentive = roundCurrency(incentive == null ? 0.0 : incentive);
@@ -108,7 +122,12 @@ public class EmployeeSalaryDetailsController {
 
         details.setNetSalary(netSalary.doubleValue());
 
-        salaryDetailsRepository.save(details);
+        if (!preview) {
+            if (!java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))) {
+                throw new IllegalStateException("Current or future month payroll is provisional; preview only");
+            }
+            salaryDetailsRepository.save(details);
+        }
         return ResponseEntity.ok(details);
     }
 
