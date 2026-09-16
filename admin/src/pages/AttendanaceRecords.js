@@ -271,19 +271,7 @@ function AttendanceFilters() {
   };
 
   const getComputedMissedMinutes = (record) => {
-    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
-    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
-    if (hasLateMinutes || hasEarlyOutMinutes) {
-      return Math.max(
-        0,
-        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
-          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
-      );
-    }
-    if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
-      return Math.max(0, Number(record.calculatedMissedMinutes));
-    }
-    return Number(record?.missedTimes || 0);
+    return record?.reviewRequired ? "Review Required" : record?.calculatedMissedMinutes ?? "-";
   };
 
   const getDerivedStatus = (record) => {
@@ -1993,7 +1981,7 @@ function AttendanceFilters() {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={`${missedMinutes} min`}
+                            label={record.reviewRequired ? "Review Required" : `${missedMinutes} min`}
                             color={missedMinutes > 0 ? "error" : "success"}
                             size="small"
                             variant="outlined"

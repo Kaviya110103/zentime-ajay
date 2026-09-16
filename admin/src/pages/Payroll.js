@@ -72,6 +72,7 @@ function EmployeePayrollViewer() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [employeeDirectory, setEmployeeDirectory] = useState([]);
   const [netSalary, setNetSalary] = useState(null);
+  const [calculationDetails, setCalculationDetails] = useState(null);
   const [openSnackbar, setOpenSnackbar] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
@@ -87,7 +88,12 @@ function EmployeePayrollViewer() {
   const [logoUploaded, setLogoUploaded] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
   const [payslipPreviewOpen, setPayslipPreviewOpen] = useState(false);
-  const [includeOvertime, setIncludeOvertime] = useState(false);
+  const [includeOvertime, setIncludeOvertime] = useState(true);
+
+  useEffect(() => {
+    setNetSalary(null);
+    setCalculationDetails(null);
+  }, [paymentDetails, additionalAllowances, includeOvertime, data]);
 
   const resetPayrollComputation = () => {
     setData(null);
@@ -100,7 +106,7 @@ function EmployeePayrollViewer() {
     setAdditionalAllowances([{ name: "", amount: 0 }]);
     setOpenSnackbar(false);
     setPayslipPreviewOpen(false);
-    setIncludeOvertime(false);
+    setIncludeOvertime(true);
   };
 
   const normalizeEmployeeIdRef = (value) => {
@@ -323,309 +329,11 @@ function EmployeePayrollViewer() {
     return time ? format(time, "HH:mm:ss") : value || "-";
   };
 
-  const formatWorkingHours = (timeIn, timeOut) => {
-    const start = parseRecordDateTime(timeIn);
-    const end = parseRecordDateTime(timeOut);
-    if (!start || !end) return "-";
-    const diffMinutes = Math.floor((end - start) / 60000);
-    if (diffMinutes < 0) return "-";
-    const hours = Math.floor(diffMinutes / 60);
-    const minutes = diffMinutes % 60;
-    return `${hours}h ${minutes}m`;
-  };
-
-  const buildDateKey = (dateValue) => {
-    const parsed = parseRecordDate(dateValue);
-    return parsed ? format(parsed, "yyyy-MM-dd") : null;
-  };
-
-  const getAdditionalWorkingDayType = (dateValue) => {
-    if (!dateValue) return null;
-    const day = dateValue.getDay();
-    if (day !== 0 && day !== 6) return null;
-
-    const firstOfMonth = new Date(dateValue.getFullYear(), dateValue.getMonth(), 1);
-    let count = 0;
-    for (let d = new Date(firstOfMonth); d <= dateValue; d.setDate(d.getDate() + 1)) {
-      if (d.getDay() === day) count += 1;
-    }
-
-    const isOdd = count % 2 === 1;
-    if (day === 6) return isOdd ? "ODD_SATURDAY" : "EVEN_SATURDAY";
-    return isOdd ? "ODD_SUNDAY" : "EVEN_SUNDAY";
-  };
-
-  const hasAdditionalWorkingDay = (employee, dateValue) => {
-    if (!employee || !dateValue) return false;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return false;
-    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
-    return Array.isArray(list)
-      ? list.some((item) => String(item?.dayType || "").toUpperCase() === type)
-      : false;
-  };
-
-  const getAdditionalWorkingDayEntry = (employee, dateValue) => {
-    if (!employee || !dateValue) return null;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return null;
-    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
-    if (!Array.isArray(list)) return null;
-    return list.find((item) => String(item?.dayType || "").toUpperCase() === type) || null;
-  };
-
-  const isWeekendOffPolicy = (employee) => {
-    const policyRaw = String(employee?.leavePolicyType || "").toLowerCase();
-    const weekOffRaw = String(employee?.weekOff || "").toLowerCase();
-    if (policyRaw.includes("weekend")) return true;
-    if (policyRaw.includes("saturday") && policyRaw.includes("sunday")) return true;
-    if (weekOffRaw.includes("saturday") && weekOffRaw.includes("sunday")) return true;
-    return false;
-  };
-
-  const isWeekOffDate = (dateValue, employee) => {
-    if (!dateValue || !employee) return false;
-    const dayName = format(dateValue, "EEEE").toLowerCase();
-
-    if (isWeekendOffPolicy(employee)) {
-      if (hasAdditionalWorkingDay(employee, dateValue)) return false;
-      return dayName === "saturday" || dayName === "sunday";
-    }
-
-    const weekOffDay = String(employee.weekOff || "").toLowerCase().trim();
-    if (!weekOffDay) return false;
-    return dayName === weekOffDay;
-  };
-
-  const getDerivedAttendanceStatus = (record) => {
-    if (!record) return "-";
-    const rawStatus = String(record.attendanceStatus || "").trim();
-    const statusLower = rawStatus.toLowerCase();
-    const dayStatus = String(record.dayStatus || "").toLowerCase();
-    const recordDate = parseRecordDate(record.date);
-    const dateKey = recordDate ? format(recordDate, "yyyy-MM-dd") : null;
-    const hasPunch = Boolean(record?.timeIn || record?.timeOut);
-
-    if (dateKey && holidayDateSet.has(dateKey)) return "Holiday";
-    if (recordDate && isWeekOffDate(recordDate, record.employee)) {
-      return hasPunch ? "Present" : "Week Off";
-    }
-
-    const isWeekend = recordDate ? recordDate.getDay() === 0 || recordDate.getDay() === 6 : false;
-    const isScheduledWeekendWork = isWeekend && recordDate
-      ? hasAdditionalWorkingDay(record.employee, recordDate)
-      : false;
-    if (
-      isScheduledWeekendWork &&
-      !hasPunch &&
-      (statusLower.includes("leave") || (dayStatus.includes("leave") && !statusLower))
-    ) {
-      return "Absent";
-    }
-
-    if (statusLower.includes("leave")) return "Leave";
-    if (dayStatus.includes("leave") && !statusLower) return "Leave";
-    return rawStatus || "-";
-  };
-
-  const normalizeAttendanceStatus = (status) => {
-    const normalized = String(status || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
-    if (!normalized) return "";
-    if (normalized.includes("present")) return "Present";
-    if (normalized.includes("absent")) return "Absent";
-    if (normalized.includes("weekoff") || normalized.includes("weekendoff")) return "Week Off";
-    if (normalized.includes("holiday")) return "Holiday";
-    return "";
-  };
-
-  const getAttendanceStatusBucket = (record) =>
-    normalizeAttendanceStatus(getDerivedAttendanceStatus(record));
-
-  const attendanceSummary = {
-    total: attendanceRecords.length,
-    present: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Present").length,
-    absent: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Absent").length,
-    weekOff: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Week Off").length,
-    holiday: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Holiday").length,
-  };
-
-  const parseTimeToMinutes = (value) => {
-    const parsed = parseRecordDateTime(value);
-    if (!parsed) return null;
-    return parsed.getHours() * 60 + parsed.getMinutes();
-  };
-
-  const getShiftStartForRecord = (record) => {
-    const employee = record?.employee;
-    if (!employee) return null;
-    const recordDate = parseRecordDate(record?.date);
-    const additionalEntry = recordDate
-      ? getAdditionalWorkingDayEntry(employee, recordDate)
-      : null;
-    if (additionalEntry?.timeIn) return additionalEntry.timeIn;
-    return employee.shiftStartTime || data?.shiftStartTime || null;
-  };
-
-  const getLateArrivalMinutes = (record) => {
-    if (record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes))) {
-      return Math.max(0, Number(record.lateMinutes));
-    }
-    if (!record?.timeIn) return 0;
-    const expectedMinutes = parseTimeToMinutes(getShiftStartForRecord(record));
-    const clockInMinutes = parseTimeToMinutes(record.timeIn);
-    if (expectedMinutes == null || clockInMinutes == null) return 0;
-    const lateMinutes = clockInMinutes - expectedMinutes;
-    return lateMinutes > 0 ? lateMinutes : 0;
-  };
-
-  const getComputedMissedMinutes = (record) => {
-    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
-    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
-    if (hasLateMinutes || hasEarlyOutMinutes) {
-      return Math.max(
-        0,
-        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
-          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
-      );
-    }
-    if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
-      return Math.max(0, Number(record.calculatedMissedMinutes));
-    }
-    return Math.max(0, Number(record?.missedTimes || 0));
-  };
-
-  const normalizeAttendancePayload = (payload) => {
-    if (Array.isArray(payload)) return payload;
-    if (payload?.records && Array.isArray(payload.records)) return payload.records;
-    if (payload?.data && Array.isArray(payload.data)) return payload.data;
-    if (payload?.items && Array.isArray(payload.items)) return payload.items;
-    return payload ? [payload] : [];
-  };
-
-  const getSelectedEmployeeDetails = (employeeRef = normalizeEmployeeIdRef(employeeId)) => {
-    const raw = String(employeeRef || "").trim();
-    if (!raw) return null;
-    const lowered = raw.toLowerCase();
-    const fromDirectory =
-      employeeDirectoryIndex.byId.get(raw) ||
-      employeeDirectoryIndex.byEmployeeId.get(raw) ||
-      employeeDirectoryIndex.byCode.get(lowered);
-
-    if (fromDirectory) return fromDirectory;
-    if (!data) return null;
-
-    const dataCandidates = [data.id, data.employeeId, data.employeeCode, data.code]
-      .filter((value) => value != null)
-      .map((value) => String(value).toLowerCase());
-    return dataCandidates.includes(lowered) ? data : null;
-  };
-
-  const enrichAttendanceRecordsWithEmployeeDetails = (items, employeeRef) => {
-    const selectedEmployee = getSelectedEmployeeDetails(employeeRef);
-    return (items || []).map((record) => {
-      const baseEmployee = record?.employee || {};
-      const idCandidates = [
-        record?.employee?.id,
-        record?.employeeId,
-        record?.employee?.employeeId,
-      ]
-        .filter((value) => value != null)
-        .map((value) => String(value));
-      const codeCandidates = [
-        record?.employee?.employeeCode,
-        record?.employee?.code,
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
-
-      let matched = null;
-      for (const idValue of idCandidates) {
-        matched =
-          employeeDirectoryIndex.byId.get(idValue) ||
-          employeeDirectoryIndex.byEmployeeId.get(idValue);
-        if (matched) break;
-      }
-      if (!matched) {
-        for (const codeValue of codeCandidates) {
-          matched = employeeDirectoryIndex.byCode.get(codeValue);
-          if (matched) break;
-        }
-      }
-
-      return {
-        ...record,
-        employee: matched || selectedEmployee
-          ? { ...baseEmployee, ...(matched || selectedEmployee) }
-          : baseEmployee,
-      };
-    });
-  };
-
-  const sortAttendanceRecords = (items) => {
-    return [...items].sort((left, right) => {
-      const leftDate = parseRecordDate(left?.date);
-      const rightDate = parseRecordDate(right?.date);
-      if (!leftDate && !rightDate) return 0;
-      if (!leftDate) return 1;
-      if (!rightDate) return -1;
-      if (rightDate.getTime() !== leftDate.getTime()) return rightDate - leftDate;
-
-      const leftTime = parseRecordDateTime(left?.timeIn);
-      const rightTime = parseRecordDateTime(right?.timeIn);
-      if (!leftTime && !rightTime) return 0;
-      if (!leftTime) return 1;
-      if (!rightTime) return -1;
-      return rightTime - leftTime;
-    });
-  };
-
-  const appendMissingAttendanceRows = (items, employeeRef, month, year) => {
-    const employee = getSelectedEmployeeDetails(employeeRef);
-    if (!employee) return items;
-
-    const existingByDateKey = new Set(
-      items
-        .map((record) => buildDateKey(record?.date))
-        .filter(Boolean)
-    );
-
-    const syntheticRows = [];
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0);
-    for (
-      let currentDate = new Date(startDate);
-      currentDate <= endDate;
-      currentDate.setDate(currentDate.getDate() + 1)
-    ) {
-      const dateKey = format(currentDate, "yyyy-MM-dd");
-      if (existingByDateKey.has(dateKey)) continue;
-      syntheticRows.push({
-        id: `virtual-${employee?.id || "emp"}-${dateKey}`,
-        date: format(currentDate, "dd/MM/yyyy"),
-        attendanceStatus: "Absent",
-        dayStatus: "",
-        timeIn: null,
-        timeOut: null,
-        missedTimes: 0,
-        location: null,
-        employee,
-        __synthetic: true,
-      });
-    }
-
-    return sortAttendanceRecords([...items, ...syntheticRows]);
-  };
-
-  const filterAttendanceRecordsByMonth = (items, month, year) => {
-    return (items || []).filter((record) => {
-      const recordDate = parseRecordDate(record?.date);
-      if (!recordDate) return false;
-      return recordDate.getMonth() + 1 === month && recordDate.getFullYear() === year;
-    });
-  };
+  const getDerivedAttendanceStatus = (record) => record?.displayStatus || record?.countStatus || "-";
+  const getAttendanceStatusBucket = (record) => record?.countStatus || "";
+  const attendanceSummary = data?.attendanceSummary || {};
+  const getLateArrivalMinutes = (record) => record?.lateMinutes ?? 0;
+  const getComputedMissedMinutes = (record) => record?.calculatedMissedMinutes ?? null;
 
   const getHolidayCounts = (payload) => {
     const full = Number(payload?.holidayDaysFull || 0);
@@ -686,31 +394,16 @@ function EmployeePayrollViewer() {
     salaryCalculation.perMinuteRate ?? data?.perMinuteSalary ?? 0
   );
 
-  const additionalAllowancesTotal = additionalAllowances.reduce((sum, item) => {
-    return sum + parseNumber(item?.amount);
-  }, 0);
-  const overtimeMinutes = Math.max(
-    0,
-    Math.round(parseNumber(data?.overtimeMinutes ?? parseNumber(data?.overtimeHours) * 60))
-  );
-  const overtimeSalary = roundCurrency(overtimeMinutes * parseNumber(data?.perMinuteSalary));
+  const additionalAllowancesTotal = calculationDetails?.additionalAllowancesTotal ?? 0;
+  const overtimeMinutes = data?.overtimeMinutes ?? 0;
+  const overtimeSalary = data?.overtimeAmount ?? 0;
   const includedOvertimeSalary = includeOvertime ? overtimeSalary : 0;
   const payrollBaseSalary = backendEstimatedSalary;
   const pfBaseSalary = parseNumber(data?.salary);
-  const lopDays = parseNumber(paymentDetails.lop);
-  const perDaySalary =
-    parseNumber(data?.perDaySalary) > 0
-      ? parseNumber(data?.perDaySalary)
-      : parseNumber(data?.scheduledDays) > 0
-      ? pfBaseSalary / parseNumber(data?.scheduledDays)
-      : 0;
-  const lopDeductionAmount = roundCurrency(lopDays * perDaySalary);
-  const resolvedPfAmount =
-    parseNumber(paymentDetails.pfAmount) > 0
-      ? parseNumber(paymentDetails.pfAmount)
-      : parseNumber(paymentDetails.pfPercentage) > 0
-      ? (pfBaseSalary * parseNumber(paymentDetails.pfPercentage)) / 100
-      : 0;
+  const lopDays = data?.absentPayableDays ?? 0;
+  const perDaySalary = data?.perDaySalary ?? 0;
+  const lopDeductionAmount = data?.attendanceDeduction ?? 0;
+  const resolvedPfAmount = calculationDetails?.pfAmount ?? 0;
 
   const casualLeaveTakenCount =
     parseNumber(data?.paidCasualDays) + parseNumber(data?.unpaidCasualDays);
@@ -739,7 +432,6 @@ function EmployeePayrollViewer() {
 
   const previewDeductions = [
     ...(SHOW_PF_SECTION ? [{ label: "PF", amount: resolvedPfAmount }] : []),
-    { label: "LOP", amount: lopDeductionAmount },
     { label: "Advance", amount: parseNumber(paymentDetails.advance) },
     { label: "Others", amount: parseNumber(paymentDetails.others) },
   ].filter((item) => item.amount > 0);
@@ -1316,22 +1008,7 @@ function EmployeePayrollViewer() {
 
     setAttendanceLoading(true);
     try {
-      const primaryUrl =
-        `${API_BASE_URL}/api/attendance-records/by-employee-month?employeeId=${encodeURIComponent(
-          employeeRef
-        )}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}`;
-      const fallbackUrl =
-        `${API_BASE_URL}/api/attendance-records/by-employee?employeeId=${encodeURIComponent(
-          employeeRef
-        )}&limit=200&clientId=${encodeURIComponent(clientId)}`;
-
-      let response = await fetch(primaryUrl);
-      if (!response.ok && response.status !== 400 && response.status !== 404) {
-        const fallbackResponse = await fetch(fallbackUrl);
-        if (fallbackResponse.ok || fallbackResponse.status === 400 || fallbackResponse.status === 404) {
-          response = fallbackResponse;
-        }
-      }
+      const response = await fetch(`${API_BASE_URL}/api/payroll/month-payroll?employeeId=${encodeURIComponent(employeeRef)}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}`);
 
       if (response.status === 400 || response.status === 404) {
         setAttendanceRecords([]);
@@ -1343,16 +1020,8 @@ function EmployeePayrollViewer() {
         throw new Error(message);
       }
       const result = await response.json();
-      const normalizedRecords = normalizeAttendancePayload(result).filter((item) => item != null);
-      const monthRecords = filterAttendanceRecordsByMonth(normalizedRecords, month, year);
-      const enrichedRecords = enrichAttendanceRecordsWithEmployeeDetails(monthRecords, employeeRef);
-      const recordsWithMissingDays = appendMissingAttendanceRows(
-        enrichedRecords,
-        employeeRef,
-        month,
-        year
-      );
-      setAttendanceRecords(sortAttendanceRecords(recordsWithMissingDays));
+      if (!Array.isArray(result.dailyRows)) throw new Error("Backend payroll ledger is unavailable");
+      setAttendanceRecords(result.dailyRows);
     } catch (err) {
       setAttendanceError(err.message || "Failed to fetch attendance records");
     } finally {
@@ -1403,29 +1072,30 @@ function EmployeePayrollViewer() {
           },
           body: new URLSearchParams({
             employeeId: employeeRef,
+            month: getMonth(selectedDate) + 1,
+            year: getYear(selectedDate),
+            includeOvertime,
+            preview: true,
             position: data.position || "",
             branch: data.branch || "",
-            salary: payrollBaseSalary || 0,
             convienceAmount: paymentDetails.convenience || 0,
             incentive: paymentDetails.incentives || 0,
-            overTime: includedOvertimeSalary || 0,
-            lossOfPay: lopDeductionAmount || 0,
             advance: paymentDetails.advance || 0,
             others: paymentDetails.others || 0,
-            pfAmount: resolvedPfAmount || 0,
+            pfAmount: paymentDetails.pfAmount || 0,
             pfPercentage: paymentDetails.pfPercentage || 0,
             additionalAllowancesJson: JSON.stringify(additionalAllowances),
-            additionalAllowancesTotal: additionalAllowancesTotal || 0,
           }),
         }
       );
 
       if (!response.ok) {
-        throw new Error("Failed to calculate salary");
+        throw new Error(await parseErrorMessage(response, "Failed to calculate salary"));
       }
 
       const result = await response.json();
       setNetSalary(result.netSalary);
+      setCalculationDetails(result);
       setOpenSnackbar(true);
     } catch (err) {
       setError(err.message || "Failed to calculate salary");
@@ -2282,11 +1952,11 @@ function EmployeePayrollViewer() {
                           </>
                         )}
                         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>LOP (Days)</Typography>
-                          <TextField fullWidth name="lop" value={paymentDetails.lop} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: 1 }} sx={styles.inputField} />
+                          <Typography>Unpaid Missing Minutes</Typography>
+                          <TextField fullWidth value={data?.absentMinutes ?? ""} variant="outlined" size="small" inputProps={{ readOnly: true }} sx={styles.inputField} />
                         </Box>
                         <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
-                          LOP Deduction: {formatINR(lopDeductionAmount)} ({lopDays} day{lopDays === 1 ? "" : "s"} x {formatINR(perDaySalary)})
+                          Attendance deduction: {formatINR(lopDeductionAmount)} (included in earned basic)
                         </Typography>
                         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
                           <Typography>Advance</Typography>
@@ -2340,7 +2010,7 @@ function EmployeePayrollViewer() {
                             + Add Allowance
                           </Button>
                           <Typography sx={{ fontWeight: 600 }}>
-                            Total: {formatINR(additionalAllowancesTotal)}
+                            Total: {calculationDetails ? formatINR(additionalAllowancesTotal) : "Pending calculation"}
                           </Typography>
                         </Box>
                         <Box
@@ -2443,7 +2113,7 @@ function EmployeePayrollViewer() {
                     </Grid>
 
                   <TableContainer component={Paper} sx={styles.panel}>
-                    <Table sx={{ minWidth: 1100, tableLayout: "fixed" }}>
+                    <Table sx={{ minWidth: 1900 }}>
                       <TableHead>
                         <TableRow sx={{ backgroundColor: "#351153" }}>
                           <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Date</TableCell>
@@ -2456,6 +2126,12 @@ function EmployeePayrollViewer() {
                           <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Late Arrival</TableCell>
                           <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Missed Times</TableCell>
                           <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Location</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Shift</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Early Out (min)</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Paid Credit (min)</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Payable (min)</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Approved OT (min)</TableCell>
+                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Day Earned</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
@@ -2494,7 +2170,7 @@ function EmployeePayrollViewer() {
                               </TableCell>
                               <TableCell>{formatTimeValue(record.timeIn)}</TableCell>
                               <TableCell>{formatTimeValue(record.timeOut)}</TableCell>
-                              <TableCell>{formatWorkingHours(record.timeIn, record.timeOut)}</TableCell>
+                              <TableCell>{record.workingDurationDisplay || "-"}</TableCell>
                               <TableCell>
                                 {lateArrivalMinutes > 0 ? (
                                   <Chip
@@ -2509,13 +2185,19 @@ function EmployeePayrollViewer() {
                               </TableCell>
                               <TableCell>
                                 <Chip
-                                  label={`${missedMinutes} min`}
+                                  label={record.reviewRequired ? "Review Required" : `${missedMinutes} min`}
                                   color={missedMinutes > 0 ? "error" : "success"}
                                   size="small"
                                   variant="outlined"
                                 />
                               </TableCell>
                               <TableCell>{record.location || "-"}</TableCell>
+                              <TableCell>{record.expectedShiftStart && record.expectedShiftEnd ? `${record.expectedShiftStart} - ${record.expectedShiftEnd}` : "-"}</TableCell>
+                              <TableCell>{record.earlyOutMinutes ?? "-"}</TableCell>
+                              <TableCell>{record.paidCreditMinutes ?? "-"}</TableCell>
+                              <TableCell>{record.payableMinutes ?? "-"}</TableCell>
+                              <TableCell>{record.approvedOvertimeMinutes ?? "-"}</TableCell>
+                              <TableCell>{formatINR(record.dayEarnedAmount)}</TableCell>
                             </TableRow>
                           );
                         })}
