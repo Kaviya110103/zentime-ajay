@@ -34,9 +34,12 @@ class PayrollSalaryControllerTest {
         var employee = new Employee(); employee.setId(1L); employee.setClientId(1L);
         when(employees.findByIdAndClientId(1L, 1L)).thenReturn(Optional.of(employee));
         var result = mock(PayrollCalculationService.PayrollResult.class);
-        when(result.estimatedNetSalary()).thenReturn(14950.0);
+        when(result.estimatedNetSalary()).thenReturn(15000.0);
         when(result.basicSalary()).thenReturn(15000.0);
         when(result.overtimeAmount()).thenReturn(new BigDecimal("50.00"));
+        when(result.lateAmount()).thenReturn(new BigDecimal("25.00"));
+        when(result.unpaidMissingMinutes()).thenReturn(0);
+        when(result.scheduledWorkingMinutes()).thenReturn(15000);
         when(payroll.calculateMonthlyPayroll(1L, 8, 2026, 1L)).thenReturn(result);
     }
 
@@ -48,13 +51,17 @@ class PayrollSalaryControllerTest {
 
     @Test void previewUsesBackendSalaryAndOvertimeInsteadOfClientAmounts() throws Exception {
         mvc.perform(preview().param("salary", "999999").param("overTime", "999999"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.salary").value(14950))
-                .andExpect(jsonPath("$.overTime").value(50)).andExpect(jsonPath("$.netSalary").value(15000));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.salary").value(15000))
+                .andExpect(jsonPath("$.overTime").value(50)).andExpect(jsonPath("$.lossOfPay").value(25))
+                .andExpect(jsonPath("$.netSalary").value(15025));
         verifyNoInteractions(salaries);
     }
 
-    @Test void manualLopCannotDeductAttendanceShortageTwice() throws Exception {
-        mvc.perform(preview().param("lossOfPay", "50")).andExpect(status().isBadRequest());
+    @Test void manualUnpaidMissingMinutesRecalculateDeduction() throws Exception {
+        mvc.perform(preview().param("lossOfPay", "50").param("applyLateDeduction", "false"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.salary").value(15000))
+                .andExpect(jsonPath("$.overTime").value(50)).andExpect(jsonPath("$.lossOfPay").value(50))
+                .andExpect(jsonPath("$.netSalary").value(15000));
         verifyNoInteractions(salaries);
     }
 

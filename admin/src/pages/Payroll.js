@@ -89,11 +89,12 @@ function EmployeePayrollViewer() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [payslipPreviewOpen, setPayslipPreviewOpen] = useState(false);
   const [includeOvertime, setIncludeOvertime] = useState(true);
+  const [applyLateDeduction, setApplyLateDeduction] = useState(true);
 
   useEffect(() => {
     setNetSalary(null);
     setCalculationDetails(null);
-  }, [paymentDetails, additionalAllowances, includeOvertime, data]);
+  }, [paymentDetails, additionalAllowances, includeOvertime, applyLateDeduction, data]);
 
   const resetPayrollComputation = () => {
     setData(null);
@@ -107,6 +108,7 @@ function EmployeePayrollViewer() {
     setOpenSnackbar(false);
     setPayslipPreviewOpen(false);
     setIncludeOvertime(true);
+    setApplyLateDeduction(true);
   };
 
   const normalizeEmployeeIdRef = (value) => {
@@ -388,7 +390,7 @@ function EmployeePayrollViewer() {
   const actualAttendance = data?.actualAttendance || {};
   const salaryCalculation = data?.salaryCalculation || {};
   const backendEstimatedSalary = parseNumber(
-    salaryCalculation.estimatedNetSalary ?? data?.netSalary ?? data?.salary
+    salaryCalculation.earnedSalary ?? salaryCalculation.estimatedNetSalary ?? data?.proratedBasic ?? data?.salary
   );
   const perMinuteSalary = parseNumber(
     salaryCalculation.perMinuteRate ?? data?.perMinuteSalary ?? 0
@@ -398,11 +400,16 @@ function EmployeePayrollViewer() {
   const overtimeMinutes = data?.overtimeMinutes ?? 0;
   const overtimeSalary = data?.overtimeAmount ?? 0;
   const includedOvertimeSalary = includeOvertime ? overtimeSalary : 0;
-  const payrollBaseSalary = backendEstimatedSalary;
   const pfBaseSalary = parseNumber(data?.salary);
   const lopDays = data?.absentPayableDays ?? 0;
-  const perDaySalary = data?.perDaySalary ?? 0;
-  const lopDeductionAmount = data?.attendanceDeduction ?? 0;
+  const unpaidMissingMinutes = parseNumber(
+    paymentDetails.lop !== "" && paymentDetails.lop !== null && paymentDetails.lop !== undefined
+      ? paymentDetails.lop
+      : salaryCalculation.unpaidMissingMinutes ?? data?.unpaidMissingMinutes ?? 0
+  );
+  const lateAmount = parseNumber(salaryCalculation.lateAmount ?? data?.lateAmount ?? 0);
+  const includedLateAmount = applyLateDeduction ? lateAmount : 0;
+  const lopDeductionAmount = roundCurrency(unpaidMissingMinutes * perMinuteSalary);
   const resolvedPfAmount = calculationDetails?.pfAmount ?? 0;
 
   const casualLeaveTakenCount =
@@ -423,7 +430,7 @@ function EmployeePayrollViewer() {
   );
 
   const previewEarnings = [
-    { label: "Estimated Net Salary", amount: backendEstimatedSalary },
+    { label: "Base / Earned Salary", amount: backendEstimatedSalary },
     { label: "Convenience", amount: parseNumber(paymentDetails.convenience) },
     { label: "OT", amount: includedOvertimeSalary },
     { label: "Incentives", amount: parseNumber(paymentDetails.incentives) },
@@ -431,6 +438,8 @@ function EmployeePayrollViewer() {
   ].filter((item) => item.amount > 0);
 
   const previewDeductions = [
+    { label: "Late Amount", amount: includedLateAmount },
+    { label: "Unpaid Missing Minutes", amount: lopDeductionAmount },
     ...(SHOW_PF_SECTION ? [{ label: "PF", amount: resolvedPfAmount }] : []),
     { label: "Advance", amount: parseNumber(paymentDetails.advance) },
     { label: "Others", amount: parseNumber(paymentDetails.others) },
@@ -923,6 +932,10 @@ function EmployeePayrollViewer() {
       }
 
       const result = await response.json();
+      const defaultMissingMinutes = parseNumber(
+        result?.salaryCalculation?.unpaidMissingMinutes ?? result?.unpaidMissingMinutes ?? result?.absentMinutes ?? 0
+      );
+      setPaymentDetails((prev) => ({ ...prev, lop: defaultMissingMinutes }));
       const payrollDays = Array.isArray(result?.additionalWorkingDays)
         ? result.additionalWorkingDays
         : [];
@@ -1075,11 +1088,13 @@ function EmployeePayrollViewer() {
             month: getMonth(selectedDate) + 1,
             year: getYear(selectedDate),
             includeOvertime,
+            applyLateDeduction,
             preview: true,
             position: data.position || "",
             branch: data.branch || "",
             convienceAmount: paymentDetails.convenience || 0,
             incentive: paymentDetails.incentives || 0,
+            lossOfPay: paymentDetails.lop || 0,
             advance: paymentDetails.advance || 0,
             others: paymentDetails.others || 0,
             pfAmount: paymentDetails.pfAmount || 0,
@@ -1872,9 +1887,9 @@ function EmployeePayrollViewer() {
                       </Box>
                       <Box sx={{ display: "grid", gap: 1.15 }}>
                         <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Basic Salary</Typography>
+                          <Typography sx={summaryLabelSx}>Base / Earned Salary</Typography>
                           <Typography sx={summaryValueSx}>
-                            {formatINR(salaryCalculation.basicSalary ?? data.salary)}
+                            {formatINR(backendEstimatedSalary)}
                           </Typography>
                         </Box>
                         <Box sx={summaryRowSx}>
@@ -1884,17 +1899,33 @@ function EmployeePayrollViewer() {
                           </Typography>
                         </Box>
                         <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Payable Working Minutes</Typography>
+                          <Typography sx={summaryLabelSx}>Total Present Days</Typography>
                           <Typography sx={summaryValueSx}>
-                            {salaryCalculation.payableWorkingMinutes ?? data.payableWorkingMinutes ?? data.payablePresentMinutes ?? 0} mins
+                            {data.workedDays ?? 0}
                           </Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Total Late Minutes</Typography>
+                          <Typography sx={summaryValueSx}>{totalLateMinutes} mins</Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Late Amount</Typography>
+                          <Typography sx={summaryValueSx}>{formatINR(lateAmount)}</Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Total Overtime Minutes</Typography>
+                          <Typography sx={summaryValueSx}>{overtimeMinutes} mins</Typography>
+                        </Box>
+                        <Box sx={summaryRowSx}>
+                          <Typography sx={summaryLabelSx}>Overtime Amount</Typography>
+                          <Typography sx={summaryValueSx}>{formatINR(overtimeSalary)}</Typography>
                         </Box>
                         <Box sx={summaryRowSx}>
                           <Typography sx={summaryLabelSx}>Per Minute Rate</Typography>
                           <Typography sx={summaryValueSx}>{formatINR(perMinuteSalary)}</Typography>
                         </Box>
                         <Box sx={summaryRowSx}>
-                          <Typography sx={{ ...summaryLabelSx, fontWeight: 700 }}>Estimated Net Salary</Typography>
+                          <Typography sx={{ ...summaryLabelSx, fontWeight: 700 }}>Final Net Salary</Typography>
                           <Typography sx={{ ...summaryValueSx, fontWeight: 700 }}>{formatINR(finalNetSalary)}</Typography>
                         </Box>
                       </Box>
@@ -1920,7 +1951,7 @@ function EmployeePayrollViewer() {
                           Approved OT: {overtimeMinutes} mins x {formatINR(data?.perMinuteSalary || 0)} = {formatINR(overtimeSalary)}
                         </Typography>
                         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <Typography>Include this OT?</Typography>
+                          <Typography>Apply Overtime Amount?</Typography>
                           <RadioGroup row value={includeOvertime ? "yes" : "no"} onChange={(event) => {
                             setIncludeOvertime(event.target.value === "yes");
                             setNetSalary(null);
@@ -1952,11 +1983,28 @@ function EmployeePayrollViewer() {
                           </>
                         )}
                         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>Unpaid Missing Minutes</Typography>
-                          <TextField fullWidth value={data?.absentMinutes ?? ""} variant="outlined" size="small" inputProps={{ readOnly: true }} sx={styles.inputField} />
+                          <Typography>Late Amount</Typography>
+                          <TextField fullWidth value={lateAmount} variant="outlined" size="small" type="number" inputProps={{ readOnly: true }} sx={styles.inputField} />
                         </Box>
                         <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
-                          Attendance deduction: {formatINR(lopDeductionAmount)} (included in earned basic)
+                          Late: {totalLateMinutes} mins x {formatINR(perMinuteSalary)} = {formatINR(lateAmount)}
+                        </Typography>
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                          <Typography>Apply Late Deduction?</Typography>
+                          <RadioGroup row value={applyLateDeduction ? "yes" : "no"} onChange={(event) => {
+                            setApplyLateDeduction(event.target.value === "yes");
+                            setNetSalary(null);
+                          }}>
+                            <FormControlLabel value="yes" control={<Radio size="small" />} label="Yes" />
+                            <FormControlLabel value="no" control={<Radio size="small" />} label="No" />
+                          </RadioGroup>
+                        </Box>
+                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
+                          <Typography>Unpaid Missing Minutes</Typography>
+                          <TextField fullWidth name="lop" value={paymentDetails.lop} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: 1 }} sx={styles.inputField} />
+                        </Box>
+                        <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
+                          Missing deduction: {unpaidMissingMinutes} mins x {formatINR(perMinuteSalary)} = {formatINR(lopDeductionAmount)}
                         </Typography>
                         <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
                           <Typography>Advance</Typography>

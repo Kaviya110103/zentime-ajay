@@ -59,9 +59,13 @@ class PayrollMinuteCalculationTest {
     @Test void lateAndEarlyDeductOnce() {
         var first = records.get(0); first.setTimeIn(first.getTimeIn().plusMinutes(20)); first.setTimeOut(first.getTimeOut().minusMinutes(40));
         var result = calculate();
-        assertThat(result.netSalary()).isEqualTo(16680);
+        assertThat(result.estimatedNetSalary()).isEqualTo(16740);
+        assertThat(result.netSalary()).isEqualTo(16700);
         assertThat(result.lateAttendanceMinutes()).isEqualTo(20);
         assertThat(result.absentMinutes()).isEqualTo(60);
+        assertThat(result.unpaidMissingMinutes()).isEqualTo(40);
+        assertThat(result.lateAmount()).isEqualByComparingTo("20");
+        assertThat(result.attendanceDeduction()).isEqualByComparingTo("40");
     }
     @Test void unpaidLeaveIsNotPaid() {
         records.remove(0); approval("Unpaid Leave", 1);
@@ -76,7 +80,10 @@ class PayrollMinuteCalculationTest {
         for (int i = 0; i < 2; i++) { var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("12:00"); }
         var result = calculate();
         assertThat(result.permissionDurationMinutes()).isEqualTo(60);
-        assertThat(result.netSalary()).isEqualTo(16680);
+        assertThat(result.estimatedNetSalary()).isEqualTo(16740);
+        assertThat(result.netSalary()).isEqualTo(16740);
+        assertThat(result.lateAttendanceMinutes()).isEqualTo(120);
+        assertThat(result.lateAmount()).isEqualByComparingTo("120");
     }
     @Test void permissionWhileAlreadyWorkingDoesNotCreditAnotherAbsence() {
         records.remove(1); var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("11:00");
