@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -91,9 +92,11 @@ public class PayrollCalculationService {
                     return date != null && date.getYear() == year && date.getMonthValue() == month;
                 }).toList();
         List<Map<String, Object>> classifiedRecords = attendanceClassificationService.classifyRecords(monthRecords, effectiveClientId);
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
         Map<LocalDate, Map<String, Object>> actualByDate = new HashMap<>();
         for (Map<String, Object> row : classifiedRecords) {
             LocalDate date = parseDbDate(String.valueOf(row.get("date")));
+            row = normalizeCurrentOpenPunch(row, date, today);
             if (actualByDate.putIfAbsent(date, row) != null) {
                 throw new IllegalStateException("Payroll review required: duplicate attendance date " + date);
             }
@@ -173,6 +176,7 @@ public class PayrollCalculationService {
             if (date == null) {
                 continue;
             }
+            row = normalizeCurrentOpenPunch(row, date, today);
             if (joiningDate != null && date.isBefore(joiningDate)) continue;
             String countStatus = String.valueOf(row.getOrDefault("countStatus", ""));
             int workedMinutes = Math.max(0, objectInt(row.get("workedMinutes")));
@@ -344,6 +348,34 @@ public class PayrollCalculationService {
                 unpaidMissingAmount,
                 lateAmount,
                 unpaidMissingMinutes);
+    }
+
+    private Map<String, Object> normalizeCurrentOpenPunch(Map<String, Object> row, LocalDate date, LocalDate today) {
+        if (row == null || date == null || today == null || !date.equals(today)) {
+            return row;
+        }
+        if (!objectBoolean(row.get("reviewRequired")) || !hasValue(row.get("timeIn")) || hasValue(row.get("timeOut"))) {
+            return row;
+        }
+        Map<String, Object> pending = new LinkedHashMap<>(row);
+        pending.put("displayStatus", "Pending");
+        pending.put("countStatus", "Pending");
+        pending.put("payableStatus", "Pending");
+        pending.put("payable", false);
+        pending.put("payableMinutes", 0);
+        pending.put("workedMinutes", 0);
+        pending.put("workedHours", 0.0);
+        pending.put("workingDurationDisplay", "Pending");
+        pending.put("candidateOvertimeMinutes", 0);
+        pending.put("lateMinutes", 0);
+        pending.put("earlyOutMinutes", 0);
+        pending.put("calculatedMissedMinutes", 0);
+        pending.put("missedTimes", 0);
+        pending.put("reviewRequired", false);
+        pending.put("reviewReason", null);
+        pending.put("payrollPending", true);
+        pending.put("payrollPendingReason", "Time Out pending");
+        return pending;
     }
 
     static BigDecimal moneyForMinutes(BigDecimal salary, int minutes, int denominator) {
@@ -951,6 +983,10 @@ public class PayrollCalculationService {
 
     private double roundMoney(double value) {
         return Math.round(value * 100.0) / 100.0;
+    }
+
+    private boolean hasValue(Object value) {
+        return value != null && !String.valueOf(value).isBlank();
     }
 
     private int objectInt(Object value) {

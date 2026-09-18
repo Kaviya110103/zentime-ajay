@@ -43,7 +43,22 @@ class PayrollMinuteCalculationTest {
             records.add(record);
         }
     }
-    private PayrollCalculationService.PayrollResult calculate() { return service.calculateMonthlyPayroll(1L, 8, 2026, 1L); }
+    private PayrollCalculationService.PayrollResult calculate() { return calculate(8, 2026); }
+    private PayrollCalculationService.PayrollResult calculate(int month, int year) {
+        return service.calculateMonthlyPayroll(1L, month, year, 1L);
+    }
+    private AttendanceRecord attendanceFor(LocalDate date, boolean closed) {
+        var record = new AttendanceRecord();
+        record.setId((long) records.size() + 1);
+        record.setEmployee(employee);
+        record.setDate(date.format(DATE));
+        record.setTimeIn(date.atTime(10, 0));
+        if (closed) {
+            record.setTimeOut(date.atTime(19, 0));
+        }
+        record.setAttendanceStatus("Present");
+        return record;
+    }
     private LeavePermission approval(String type, int day) {
         var leave = new LeavePermission(); leave.setEmployee(employee); leave.setLeaveType(type);
         leave.setDate(LocalDate.of(2026, 8, day).format(DATE));
@@ -114,6 +129,25 @@ class PayrollMinuteCalculationTest {
         assertThatThrownBy(this::calculate).isInstanceOf(IllegalStateException.class).hasMessageContaining("review required");
         records.get(0).setTimeOut(records.get(0).getTimeIn().plusHours(9)); records.add(records.get(0));
         assertThatThrownBy(this::calculate).isInstanceOf(IllegalStateException.class).hasMessageContaining("duplicate");
+    }
+    @Test void currentDayOpenPunchIsPendingAndDoesNotBlockDailyPayroll() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        records.clear();
+        for (int d = 1; d < today.getDayOfMonth(); d++) {
+            records.add(attendanceFor(today.withDayOfMonth(d), true));
+        }
+        records.add(attendanceFor(today, false));
+
+        var result = calculate(today.getMonthValue(), today.getYear());
+        Map<String, Object> todayRow = result.dailyRows().stream()
+                .filter(row -> today.equals(LocalDate.parse(String.valueOf(row.get("date")), DATE)))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(todayRow.get("displayStatus")).isEqualTo("Pending");
+        assertThat(todayRow.get("payrollPending")).isEqualTo(true);
+        assertThat(todayRow.get("payableMinutes")).isEqualTo(0);
+        assertThat(todayRow.get("dayEarnedAmount")).isEqualTo(BigDecimal.ZERO.setScale(2));
     }
     @Test void tenantMismatchCannotCalculatePayroll() {
         assertThatThrownBy(() -> service.calculateMonthlyPayroll(1L, 8, 2026, 2L)).isInstanceOf(IllegalArgumentException.class);
