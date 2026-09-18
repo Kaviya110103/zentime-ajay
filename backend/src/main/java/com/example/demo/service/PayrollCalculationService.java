@@ -246,9 +246,20 @@ public class PayrollCalculationService {
             day.put("paidCreditMinutes", Math.max(0, payable - workedMinutes));
             day.put("payableMinutes", payable);
             day.put("approvedOvertimeMinutes", ot);
-            day.put("unpaidMissingMinutes", Math.max(0, scheduledMinutes - payable));
+            int unpaidMissing = Math.max(0, scheduledMinutes - payable);
+            int lateMinutes = Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
+            BigDecimal perDaySalaryAmount = scheduledMinutes > 0
+                    ? moneyForMinutes(monthlySalary, scheduledMinutes, scheduledWorkingMinutes)
+                    : BigDecimal.ZERO.setScale(2);
+            BigDecimal lateDeductionAmount = moneyForMinutes(monthlySalary, lateMinutes, scheduledWorkingMinutes);
+            day.put("unpaidMissingMinutes", unpaidMissing);
+            day.put("perDaySalaryAmount", perDaySalaryAmount);
+            day.put("perDaySalary", perDaySalaryAmount);
+            day.put("lateDeductionAmount", lateDeductionAmount);
+            day.put("lateDeduction", lateDeductionAmount);
             day.put("dayEarnedAmount", moneyForMinutes(monthlySalary, payable, scheduledWorkingMinutes));
             day.put("overtimeAmount", moneyForMinutes(monthlySalary, ot, scheduledWorkingMinutes));
+            day.put("payrollRemark", buildPayrollRemark(day, paidLeave, payable, scheduledMinutes, lateMinutes, ot, unpaidMissing));
             dailyRows.add(day);
         }
         int payableScheduledMinutes = payableRegularMinutes;
@@ -286,6 +297,12 @@ public class PayrollCalculationService {
         reconcileDailyAmounts(dailyRows, "dayEarnedAmount", proratedBasic);
         BigDecimal overtimeAmount = moneyForMinutes(monthlySalary, overtimeMinutes, scheduledWorkingMinutes);
         reconcileDailyAmounts(dailyRows, "overtimeAmount", overtimeAmount);
+        for (Map<String, Object> row : dailyRows) {
+            BigDecimal dayEarned = (BigDecimal) row.getOrDefault("dayEarnedAmount", BigDecimal.ZERO.setScale(2));
+            BigDecimal lateDeduction = (BigDecimal) row.getOrDefault("lateDeductionAmount", BigDecimal.ZERO.setScale(2));
+            BigDecimal dayOvertime = (BigDecimal) row.getOrDefault("overtimeAmount", BigDecimal.ZERO.setScale(2));
+            row.put("dailyEarnedSalary", dayEarned.subtract(lateDeduction).add(dayOvertime));
+        }
 
         double expectedHours = minutesToHours(scheduledWorkingMinutes);
         double payableHours = minutesToHours(payableWorkingMinutes);
@@ -376,6 +393,36 @@ public class PayrollCalculationService {
         pending.put("payrollPending", true);
         pending.put("payrollPendingReason", "Time Out pending");
         return pending;
+    }
+
+    private String buildPayrollRemark(Map<String, Object> day, boolean paidLeave, int payable, int scheduledMinutes,
+            int lateMinutes, int overtimeMinutes, int unpaidMissingMinutes) {
+        if (objectBoolean(day.get("payrollPending"))) {
+            return String.valueOf(day.getOrDefault("payrollPendingReason", "Time Out pending"));
+        }
+        String status = String.valueOf(day.getOrDefault("displayStatus", day.getOrDefault("countStatus", "")));
+        List<String> parts = new ArrayList<>();
+        if (objectBoolean(day.get("weekOff"))) {
+            parts.add("Weekly Off - Paid");
+        } else if ("Holiday".equalsIgnoreCase(status) || objectBoolean(day.get("holiday"))) {
+            parts.add("Public Holiday - Paid");
+        } else if (paidLeave) {
+            parts.add("Casual Leave - Paid");
+        } else if (payable > 0 && scheduledMinutes > 0) {
+            parts.add("Full day present");
+        } else if (unpaidMissingMinutes > 0 || "Absent".equalsIgnoreCase(status)) {
+            parts.add("Absent - LOP");
+        }
+        if (lateMinutes > 0) {
+            parts.add(lateMinutes + " min late");
+        }
+        if (overtimeMinutes > 0) {
+            parts.add(overtimeMinutes + " min overtime");
+        }
+        if (parts.isEmpty()) {
+            return status == null || status.isBlank() ? "-" : status;
+        }
+        return String.join(" | ", parts);
     }
 
     static BigDecimal moneyForMinutes(BigDecimal salary, int minutes, int denominator) {
