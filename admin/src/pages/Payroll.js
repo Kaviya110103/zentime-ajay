@@ -90,6 +90,8 @@ function EmployeePayrollViewer() {
   const [payslipPreviewOpen, setPayslipPreviewOpen] = useState(false);
   const [includeOvertime, setIncludeOvertime] = useState(true);
   const [applyLateDeduction, setApplyLateDeduction] = useState(true);
+  const [payrollSearch, setPayrollSearch] = useState("");
+  const [payrollStatusFilter, setPayrollStatusFilter] = useState("");
 
   useEffect(() => {
     setNetSalary(null);
@@ -448,6 +450,127 @@ function EmployeePayrollViewer() {
   const finalNetSalary = parseNumber(
     netSalary !== null && netSalary !== undefined ? netSalary : backendEstimatedSalary
   );
+  const employeeDisplayName = data
+    ? `${data.firstName || ""} ${data.lastName || ""}`.trim() || data.name || "Employee"
+    : "";
+  const monthLabel = format(selectedDate || new Date(), "MMMM yyyy");
+  const remainingCl = Math.max(
+    0,
+    parseNumber(data?.casualLeaveBalance ?? data?.expectedAttendance?.clEntitlement ?? 0) -
+      parseNumber(data?.paidCasualDays ?? 0)
+  );
+  const currentEarnedSalary = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount ?? 0),
+    0
+  );
+  const paidDays = attendanceRecords.filter((row) => parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount ?? 0) > 0).length;
+  const lopDayCount = attendanceRecords.filter((row) => {
+    const status = String(row?.displayStatus || row?.countStatus || "").toLowerCase();
+    return status.includes("absent") || status.includes("lop") || parseNumber(row?.unpaidMissingMinutes) > 0;
+  }).length;
+  const totalLateDeduction = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.lateDeductionAmount ?? row?.lateDeduction ?? 0),
+    0
+  );
+  const totalOvertimeAmount = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.overtimeAmount ?? 0),
+    0
+  );
+  const monthToDateSummary = attendanceRecords.reduce(
+    (summary, row) => {
+      const status = String(row?.displayStatus || row?.countStatus || "").toLowerCase();
+      summary.total += 1;
+      if (status.includes("present")) summary.present += 1;
+      else if (status.includes("week off")) summary.weekOff += 1;
+      else if (status.includes("holiday")) summary.holiday += 1;
+      else if (status.includes("pending")) summary.pending += 1;
+      else if (status.includes("leave") || status.includes("cl")) summary.clApproved += parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount) > 0 ? 1 : 0;
+      else if (status.includes("absent") || status.includes("lop")) summary.lop += 1;
+      return summary;
+    },
+    { total: 0, present: 0, weekOff: 0, holiday: 0, clApproved: 0, pending: 0, lop: 0 }
+  );
+  const payrollStatusOptions = ["Present", "Week Off", "Holiday", "CL Approved", "CL Pending", "CL Rejected", "Absent", "LOP", "Late", "Overtime"];
+  const statusBadgeSx = (status) => {
+    const normalized = String(status || "").toLowerCase();
+    if (normalized.includes("present")) return { bgcolor: "#dcfce7", color: "#166534" };
+    if (normalized.includes("week off")) return { bgcolor: "#dbeafe", color: "#1d4ed8" };
+    if (normalized.includes("holiday")) return { bgcolor: "#fef3c7", color: "#92400e" };
+    if (normalized.includes("pending")) return { bgcolor: "#ffedd5", color: "#c2410c" };
+    if (normalized.includes("leave") || normalized.includes("cl")) return { bgcolor: "#ede9fe", color: "#6d28d9" };
+    if (normalized.includes("absent") || normalized.includes("lop") || normalized.includes("reject")) return { bgcolor: "#fee2e2", color: "#b91c1c" };
+    return { bgcolor: "#e5e7eb", color: "#374151" };
+  };
+  const filteredPayrollRows = attendanceRecords.filter((row) => {
+    const status = String(row?.displayStatus || row?.countStatus || "");
+    const remark = String(row?.payrollRemark || "");
+    const search = payrollSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      String(row?.date || "").toLowerCase().includes(search) ||
+      status.toLowerCase().includes(search) ||
+      employeeDisplayName.toLowerCase().includes(search) ||
+      remark.toLowerCase().includes(search);
+    const matchesFilter =
+      !payrollStatusFilter ||
+      status.toLowerCase().includes(payrollStatusFilter.toLowerCase()) ||
+      (payrollStatusFilter === "Late" && parseNumber(row?.lateMinutes) > 0) ||
+      (payrollStatusFilter === "Overtime" && parseNumber(row?.approvedOvertimeMinutes) > 0) ||
+      (payrollStatusFilter === "LOP" && parseNumber(row?.unpaidMissingMinutes) > 0);
+    return matchesSearch && matchesFilter;
+  });
+
+  const refreshPayroll = () => handleSubmit({ preventDefault: () => {} });
+  const moveMonth = (amount) => {
+    const next = new Date(selectedDate || new Date());
+    next.setMonth(next.getMonth() + amount);
+    setSelectedDate(next);
+    resetPayrollComputation();
+  };
+  const exportPayrollCsv = () => {
+    if (!data || filteredPayrollRows.length === 0) return;
+    const headers = [
+      "Employee",
+      "Month",
+      "Date",
+      "Day",
+      "Status",
+      "Time In",
+      "Time Out",
+      "Late Min",
+      "Late Deduction",
+      "OT Min",
+      "OT Amount",
+      "Per Day Salary",
+      "Daily Earned Salary",
+      "Remarks",
+    ];
+    const rows = filteredPayrollRows.map((row) => [
+      employeeDisplayName,
+      monthLabel,
+      formatAttendanceDate(row.date),
+      formatDayName(row.date),
+      row.displayStatus || row.countStatus || "-",
+      formatTimeValue(row.timeIn),
+      formatTimeValue(row.timeOut),
+      row.lateMinutes ?? 0,
+      parseNumber(row.lateDeductionAmount ?? row.lateDeduction ?? 0),
+      row.approvedOvertimeMinutes ?? 0,
+      parseNumber(row.overtimeAmount ?? 0),
+      parseNumber(row.perDaySalaryAmount ?? row.perDaySalary ?? 0),
+      parseNumber(row.dailyEarnedSalary ?? row.dayEarnedAmount ?? 0),
+      row.payrollRemark || "-",
+    ]);
+    const csv = [headers, ...rows]
+      .map((line) => line.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `payroll-${employeeId || data.employeeId}-${format(selectedDate, "yyyy-MM")}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const handlePrint = () => {
     if (!data) return;
@@ -932,6 +1055,9 @@ function EmployeePayrollViewer() {
       }
 
       const result = await response.json();
+      if (Array.isArray(result?.dailyRows)) {
+        setAttendanceRecords(result.dailyRows);
+      }
       const defaultMissingMinutes = parseNumber(
         result?.salaryCalculation?.unpaidMissingMinutes ?? result?.unpaidMissingMinutes ?? result?.absentMinutes ?? 0
       );
@@ -1229,17 +1355,17 @@ function EmployeePayrollViewer() {
     page: {
       minHeight: "100vh",
       background:
-        "radial-gradient(900px 620px at 8% 10%, rgba(123,74,184,0.14), transparent 60%), radial-gradient(880px 620px at 90% 0%, rgba(170,130,225,0.16), transparent 65%), linear-gradient(180deg, #f7f3fc 0%, #f1ebf9 42%, #ede6f6 100%)",
-      color: "#2a1e3f",
+        "linear-gradient(180deg, #f7fbff 0%, #eef6ff 44%, #f8fafc 100%)",
+      color: "#0f172a",
       pb: 6,
     },
     hero: {
       background:
-        "linear-gradient(135deg, #351153 0%, #4f2677 48%, #65388f 100%)",
+        "linear-gradient(135deg, #0f5ea8 0%, #1677c8 52%, #38bdf8 100%)",
       color: "#ffffff",
-      borderRadius: 4,
+      borderRadius: 3,
       padding: { xs: "24px", md: "32px" },
-      boxShadow: "0 18px 42px rgba(53,17,83,0.28)",
+      boxShadow: "0 18px 42px rgba(15,94,168,0.22)",
       position: "relative",
       overflow: "hidden",
       border: "1px solid rgba(255,255,255,0.22)",
@@ -1248,7 +1374,7 @@ function EmployeePayrollViewer() {
       position: "absolute",
       inset: 0,
       background:
-        "radial-gradient(420px 240px at 20% 20%, rgba(255,255,255,0.24), transparent 60%), radial-gradient(420px 240px at 85% 10%, rgba(214,186,255,0.22), transparent 60%)",
+        "radial-gradient(420px 240px at 20% 20%, rgba(255,255,255,0.24), transparent 60%)",
       pointerEvents: "none",
     },
     heroTitle: {
@@ -1281,35 +1407,35 @@ function EmployeePayrollViewer() {
     panel: {
       backgroundColor: "#ffffff",
       borderRadius: 3,
-      border: "1px solid rgba(53,17,83,0.1)",
-      boxShadow: "0 12px 30px rgba(53,17,83,0.12)",
+      border: "1px solid rgba(15,94,168,0.12)",
+      boxShadow: "0 12px 30px rgba(15,23,42,0.08)",
     },
     sectionTitle: {
       fontFamily: '"Manrope", sans-serif',
       fontWeight: 700,
-      color: "#351153",
+      color: "#0f5ea8",
       marginBottom: "12px",
       letterSpacing: "0.5px",
       fontSize: "0.9rem",
       textTransform: "uppercase",
     },
     primaryButton: {
-      background: "linear-gradient(135deg, #351153 0%, #5a2d8a 100%)",
+      background: "linear-gradient(135deg, #0f5ea8 0%, #1677c8 100%)",
       color: "#ffffff",
       "&:hover": {
-        background: "linear-gradient(135deg, #2d0f47 0%, #4c2575 100%)",
+        background: "linear-gradient(135deg, #0b4a86 0%, #115fa1 100%)",
       },
       textTransform: "none",
       fontWeight: 700,
-      boxShadow: "0 12px 26px rgba(53,17,83,0.3)",
+      boxShadow: "0 12px 26px rgba(15,94,168,0.24)",
     },
     secondaryButton: {
       backgroundColor: "#ffffff",
-      color: "#351153",
-      border: "1px solid rgba(53,17,83,0.3)",
+      color: "#0f5ea8",
+      border: "1px solid rgba(15,94,168,0.3)",
       "&:hover": {
-        backgroundColor: "#f3ecfb",
-        border: "1px solid rgba(53,17,83,0.55)",
+        backgroundColor: "#eef6ff",
+        border: "1px solid rgba(15,94,168,0.55)",
       },
       textTransform: "none",
       fontWeight: 600,
@@ -1333,41 +1459,41 @@ function EmployeePayrollViewer() {
         backgroundColor: "#ffffff",
         borderRadius: 2,
         "& fieldset": {
-          borderColor: "rgba(53,17,83,0.2)",
+          borderColor: "rgba(15,94,168,0.18)",
         },
         "&:hover fieldset": {
-          borderColor: "rgba(53,17,83,0.45)",
+          borderColor: "rgba(15,94,168,0.42)",
         },
         "&.Mui-focused fieldset": {
-          borderColor: "#351153",
+          borderColor: "#0f5ea8",
         },
       },
       "& .MuiInputBase-input": {
-        color: "#2a1e3f",
+        color: "#0f172a",
       },
       "& label": {
-        color: "rgba(53,17,83,0.75)",
+        color: "rgba(15,23,42,0.65)",
       },
     },
     statCard: {
       padding: "18px 20px",
       borderRadius: 2.5,
       background:
-        "linear-gradient(140deg, #ffffff 0%, #f8f4ff 100%)",
-      border: "1px solid rgba(53,17,83,0.12)",
-      boxShadow: "0 10px 24px rgba(53,17,83,0.11)",
+        "linear-gradient(140deg, #ffffff 0%, #f8fbff 100%)",
+      border: "1px solid rgba(15,94,168,0.12)",
+      boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
     },
     statLabel: {
       fontSize: "0.8rem",
       textTransform: "uppercase",
       letterSpacing: "0.6px",
-      color: "rgba(53,17,83,0.72)",
+      color: "rgba(15,23,42,0.62)",
       fontWeight: 700,
     },
     statValue: {
       fontSize: "1.35rem",
       fontWeight: 700,
-      color: "#351153",
+      color: "#0f5ea8",
       marginTop: "6px",
     },
     salaryDetailsWrapper: {
@@ -1409,7 +1535,7 @@ function EmployeePayrollViewer() {
       color: "#351153",
     },
     tableHeaderRow: {
-      backgroundColor: "#f4eefe",
+      backgroundColor: "#eaf4ff",
     },
     darkTable: {
       "& td, & th": {
@@ -1446,20 +1572,49 @@ function EmployeePayrollViewer() {
         <Container maxWidth="xl" sx={{ pt: 4, px: { xs: 2, md: 4 } }}>
           <Box sx={styles.hero}>
             <Box sx={styles.heroGlow} />
-            <Box sx={{ position: "relative" }}>
-              <Typography sx={styles.heroTitle}>Payroll Dashboard</Typography>
-              <Typography sx={styles.heroSub}>
-                Manage payroll, attendance, and salary insights for each employee.
-              </Typography>
-              <Box sx={styles.actionRow}>
-                <Box sx={styles.chip}>
-                  {format(selectedDate, "MMMM yyyy")}
-                </Box>
-                {data && (
-                  <Box sx={styles.chip}>
-                    Employee #{employeeId || data.employeeId}
-                  </Box>
-                )}
+            <Box sx={{ position: "relative", display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 3, justifyContent: "space-between" }}>
+              <Box>
+                <Typography sx={styles.heroTitle}>Payroll Dashboard</Typography>
+                <Typography sx={styles.heroSub}>
+                  Daily payroll details and salary calculation
+                </Typography>
+              </Box>
+              <Box sx={{ display: "flex", gap: 1.2, alignItems: "center", flexWrap: "wrap", justifyContent: { xs: "flex-start", md: "flex-end" } }}>
+                <DatePicker
+                  views={["year", "month"]}
+                  value={selectedDate}
+                  onChange={(newValue) => {
+                    setSelectedDate(newValue);
+                    resetPayrollComputation();
+                  }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      size="small"
+                      sx={{
+                        width: 180,
+                        "& .MuiOutlinedInput-root": {
+                          bgcolor: "rgba(255,255,255,0.18)",
+                          color: "#fff",
+                          borderRadius: 2,
+                          "& fieldset": { borderColor: "rgba(255,255,255,0.45)" },
+                          "&:hover fieldset": { borderColor: "rgba(255,255,255,0.75)" },
+                        },
+                        "& .MuiInputBase-input": { color: "#fff", fontWeight: 700 },
+                        "& .MuiSvgIcon-root": { color: "#fff" },
+                      }}
+                    />
+                  )}
+                />
+                <Button variant="outlined" onClick={() => moveMonth(-1)} sx={{ color: "#fff", borderColor: "rgba(255,255,255,0.55)", textTransform: "none" }}>
+                  Previous Month
+                </Button>
+                <Button variant="outlined" onClick={() => moveMonth(1)} sx={{ color: "#fff", borderColor: "rgba(255,255,255,0.55)", textTransform: "none" }}>
+                  Next Month
+                </Button>
+                <Button variant="contained" onClick={refreshPayroll} disabled={loading || !employeeId} sx={{ bgcolor: "#ffffff", color: "#0f5ea8", fontWeight: 800, textTransform: "none", "&:hover": { bgcolor: "#eaf4ff" } }}>
+                  Generate / Refresh
+                </Button>
                 {data && (
                   <Tooltip title="Print Payroll Summary">
                     <IconButton onClick={handlePrint} sx={{ color: "#ffffff" }}>
@@ -1662,6 +1817,68 @@ function EmployeePayrollViewer() {
             {/* Data Display Section */}
             {data && (
               <Box>
+                <Paper sx={{ ...styles.panel, p: { xs: 2.5, md: 3 }, mb: 3 }}>
+                  <Grid container spacing={3} alignItems="center">
+                    <Grid item xs={12} md={4}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+                        <Avatar
+                          src={resolveProfileImageUrl(data.profileImage)}
+                          sx={{ width: 72, height: 72, bgcolor: "#dbeafe", color: "#0f5ea8", fontWeight: 800 }}
+                        >
+                          {employeeDisplayName?.[0] || "E"}
+                        </Avatar>
+                        <Box>
+                          <Typography sx={{ fontSize: "1.25rem", fontWeight: 800, color: "#0f172a" }}>
+                            {employeeDisplayName}
+                          </Typography>
+                          <Typography sx={{ color: "#64748b", fontWeight: 600 }}>
+                            EMP {employeeId || data.employeeId} | {data.position || "Designation not set"} | {data.branch || "Department not set"}
+                          </Typography>
+                          <Chip size="small" label={data.status || "Active"} sx={{ mt: 1, bgcolor: "#dcfce7", color: "#166534", fontWeight: 700 }} />
+                        </Box>
+                      </Box>
+                    </Grid>
+                    {[
+                      ["Basic Salary", formatINR(data.salary || 0)],
+                      ["Per Day Salary", formatINR(data.perDaySalary || 0)],
+                      ["Shift", formatShiftWindow(data.shiftStartTime, data.shiftEndTime)],
+                      ["Weekly Off", formatWeekOffDay(data.weekOffDay)],
+                      ["Allowed CL", `${data.casualLeaveBalance ?? 0} Days`],
+                      ["Used CL", `${data.paidCasualDays ?? 0} Days`],
+                      ["Remaining CL", `${remainingCl} Days`],
+                      ["Payroll Month", monthLabel],
+                    ].map(([label, value]) => (
+                      <Grid item xs={6} sm={4} md={1} key={label}>
+                        <Typography sx={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 800, textTransform: "uppercase" }}>
+                          {label}
+                        </Typography>
+                        <Typography sx={{ color: "#0f172a", fontWeight: 800, mt: 0.5 }}>
+                          {value}
+                        </Typography>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Paper>
+
+                <Grid container spacing={2.2} sx={{ mb: 3 }}>
+                  {[
+                    { label: "Current Earned Salary", value: formatINR(currentEarnedSalary), helper: "Till selected payroll date", color: "#16a34a", bg: "#dcfce7" },
+                    { label: "Paid Days", value: paidDays, helper: "Present + paid credits", color: "#0f5ea8", bg: "#dbeafe" },
+                    { label: "LOP Days", value: lopDayCount, helper: "Absent / unpaid dates", color: "#dc2626", bg: "#fee2e2" },
+                    { label: "Total Late Minutes", value: `${totalLateMinutes} min`, helper: `Late Deduction: -${formatINR(totalLateDeduction)}`, color: "#ea580c", bg: "#ffedd5" },
+                    { label: "Overtime Minutes", value: `${overtimeMinutes} min`, helper: `Overtime Amount: +${formatINR(totalOvertimeAmount || overtimeSalary)}`, color: "#7c3aed", bg: "#ede9fe" },
+                  ].map((card) => (
+                    <Grid item xs={12} sm={6} md={2.4} key={card.label}>
+                      <Paper sx={{ ...styles.statCard, height: "100%", borderTop: `4px solid ${card.color}` }}>
+                        <Box sx={{ width: 38, height: 38, borderRadius: 2, bgcolor: card.bg, mb: 1.4 }} />
+                        <Typography sx={styles.statLabel}>{card.label}</Typography>
+                        <Typography sx={{ ...styles.statValue, color: card.color }}>{card.value}</Typography>
+                        <Typography sx={{ color: "#64748b", fontSize: "0.82rem", mt: 0.6 }}>{card.helper}</Typography>
+                      </Paper>
+                    </Grid>
+                  ))}
+                </Grid>
+
                 <Grid container spacing={3} sx={{ mb: 3 }}>
                   <Grid item xs={12} sm={6} md={3}>
                     <Paper sx={styles.statCard}>
@@ -2107,9 +2324,41 @@ function EmployeePayrollViewer() {
 
             {(attendanceRecords.length > 0 || attendanceError) && (
               <Box sx={{ mt: 4 }}>
-                <Typography variant="subtitle1" sx={styles.sectionTitle}>
-                  Attendance Report ({format(selectedDate, "MMMM yyyy")})
-                </Typography>
+                <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2, justifyContent: "space-between", alignItems: { xs: "stretch", md: "center" }, mb: 2 }}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ ...styles.sectionTitle, mb: 0.5 }}>
+                      Daily Payroll Details
+                    </Typography>
+                    <Typography sx={{ color: "#64748b" }}>
+                      Transparent day-by-day salary calculation for {monthLabel}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: "flex", gap: 1.2, flexWrap: "wrap" }}>
+                    <TextField
+                      size="small"
+                      placeholder="Search date, status, employee, remarks"
+                      value={payrollSearch}
+                      onChange={(event) => setPayrollSearch(event.target.value)}
+                      sx={{ ...styles.inputField, minWidth: { xs: "100%", sm: 260 } }}
+                    />
+                    <FormControl size="small" sx={{ ...styles.inputField, minWidth: 180 }}>
+                      <InputLabel>Status Filter</InputLabel>
+                      <Select
+                        value={payrollStatusFilter}
+                        label="Status Filter"
+                        onChange={(event) => setPayrollStatusFilter(event.target.value)}
+                      >
+                        <MenuItem value="">All Status</MenuItem>
+                        {payrollStatusOptions.map((option) => (
+                          <MenuItem key={option} value={option}>{option}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Button variant="outlined" sx={styles.secondaryButton} onClick={exportPayrollCsv} disabled={!filteredPayrollRows.length}>
+                      Export
+                    </Button>
+                  </Box>
+                </Box>
                 {attendanceError && (
                   <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
                     {attendanceError}
@@ -2117,141 +2366,126 @@ function EmployeePayrollViewer() {
                 )}
                 {attendanceRecords.length > 0 && (
                   <>
-                    <Grid container spacing={2} sx={{ mb: 2 }}>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2 }}>
-                          <Typography sx={styles.statLabel}>Total Records</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800 }}>
-                            {attendanceSummary.total}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e8f5e8" }}>
-                          <Typography sx={styles.statLabel}>Present</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#2e7d32" }}>
-                            {attendanceSummary.present}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#ffebee" }}>
-                          <Typography sx={styles.statLabel}>Absent</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#d32f2f" }}>
-                            {attendanceSummary.absent}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e3f2fd" }}>
-                          <Typography sx={styles.statLabel}>Week Off</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#0288d1" }}>
-                            {attendanceSummary.weekOff}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#fff8e1" }}>
-                          <Typography sx={styles.statLabel}>Holiday</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#ed6c02" }}>
-                            {attendanceSummary.holiday}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                    </Grid>
-
                   <TableContainer component={Paper} sx={styles.panel}>
-                    <Table sx={{ minWidth: 1900 }}>
+                    <Table sx={{ minWidth: 1500 }}>
                       <TableHead>
-                        <TableRow sx={{ backgroundColor: "#351153" }}>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Date</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Day</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "16%" }}>Employee</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Status</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time In</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time Out</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "12%" }}>Working Hours</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Late Arrival</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Missed Times</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Location</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Shift</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Early Out (min)</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Paid Credit (min)</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Payable (min)</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Approved OT (min)</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold" }}>Day Earned</TableCell>
+                        <TableRow sx={{ backgroundColor: "#eaf4ff" }}>
+                          {["Date", "Day", "Status", "Time In", "Time Out", "Late Min", "Late Deduction", "OT Min", "OT Amount", "Per Day Salary", "Daily Earned Salary", "Remarks"].map((head) => (
+                            <TableCell key={head} sx={{ color: "#0f172a", fontWeight: 800 }}>{head}</TableCell>
+                          ))}
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {attendanceRecords.map((record, index) => {
+                        {filteredPayrollRows.map((record, index) => {
                           const derivedStatus = getDerivedAttendanceStatus(record);
                           const statusBucket = getAttendanceStatusBucket(record);
                           const displayStatus = statusBucket || derivedStatus;
-                          const lateArrivalMinutes = getLateArrivalMinutes(record);
-                          const missedMinutes = getComputedMissedMinutes(record);
-                          const statusColor =
-                            statusBucket === "Present"
-                              ? "success"
-                              : statusBucket === "Absent"
-                              ? "error"
-                              : derivedStatus === "Late"
-                              ? "warning"
-                              : statusBucket === "Week Off"
-                              ? "info"
-                              : statusBucket === "Holiday" || derivedStatus === "Leave"
-                              ? "secondary"
-                              : "default";
+                          const lateArrivalMinutes = parseNumber(record.lateMinutes ?? getLateArrivalMinutes(record));
+                          const lateDeduction = parseNumber(record.lateDeductionAmount ?? record.lateDeduction ?? 0);
+                          const otMinutes = parseNumber(record.approvedOvertimeMinutes ?? 0);
+                          const otAmount = parseNumber(record.overtimeAmount ?? 0);
+                          const perDay = parseNumber(record.perDaySalaryAmount ?? record.perDaySalary ?? 0);
+                          const dailyEarned = parseNumber(record.dailyEarnedSalary ?? record.dayEarnedAmount ?? 0);
 
                           return (
                             <TableRow key={record.id ?? `${record.date || "row"}-${index}`} hover>
                               <TableCell>{formatAttendanceDate(record.date)}</TableCell>
                               <TableCell>{formatDayName(record.date)}</TableCell>
                               <TableCell>
-                                {record.employee
-                                  ? `${record.employee.firstName || ""} ${record.employee.lastName || ""}`.trim()
-                                  : data?.firstName
-                                  ? `${data.firstName} ${data.lastName || ""}`.trim()
-                                  : "-"}
-                              </TableCell>
-                              <TableCell>
-                                <Chip label={displayStatus} color={statusColor} size="small" />
+                                <Chip label={displayStatus} size="small" sx={{ ...statusBadgeSx(displayStatus), fontWeight: 800 }} />
                               </TableCell>
                               <TableCell>{formatTimeValue(record.timeIn)}</TableCell>
                               <TableCell>{formatTimeValue(record.timeOut)}</TableCell>
-                              <TableCell>{record.workingDurationDisplay || "-"}</TableCell>
                               <TableCell>
-                                {lateArrivalMinutes > 0 ? (
-                                  <Chip
-                                    label={`${lateArrivalMinutes} min`}
-                                    color="warning"
-                                    size="small"
-                                    variant="outlined"
-                                  />
-                                ) : (
-                                  "-"
-                                )}
+                                {lateArrivalMinutes > 0 ? `${lateArrivalMinutes} min` : "0"}
                               </TableCell>
-                              <TableCell>
-                                <Chip
-                                  label={record.reviewRequired ? "Review Required" : `${missedMinutes} min`}
-                                  color={missedMinutes > 0 ? "error" : "success"}
-                                  size="small"
-                                  variant="outlined"
-                                />
+                              <TableCell sx={{ color: lateDeduction > 0 ? "#dc2626" : "#64748b", fontWeight: 700 }}>
+                                {lateDeduction > 0 ? `-${formatINR(lateDeduction)}` : formatINR(0)}
                               </TableCell>
-                              <TableCell>{record.location || "-"}</TableCell>
-                              <TableCell>{record.expectedShiftStart && record.expectedShiftEnd ? `${record.expectedShiftStart} - ${record.expectedShiftEnd}` : "-"}</TableCell>
-                              <TableCell>{record.earlyOutMinutes ?? "-"}</TableCell>
-                              <TableCell>{record.paidCreditMinutes ?? "-"}</TableCell>
-                              <TableCell>{record.payableMinutes ?? "-"}</TableCell>
-                              <TableCell>{record.approvedOvertimeMinutes ?? "-"}</TableCell>
-                              <TableCell>{formatINR(record.dayEarnedAmount)}</TableCell>
+                              <TableCell>{otMinutes > 0 ? `${otMinutes} min` : "0"}</TableCell>
+                              <TableCell sx={{ color: otAmount > 0 ? "#16a34a" : "#64748b", fontWeight: 700 }}>
+                                {otAmount > 0 ? `+${formatINR(otAmount)}` : formatINR(0)}
+                              </TableCell>
+                              <TableCell>{formatINR(perDay)}</TableCell>
+                              <TableCell sx={{ color: dailyEarned > 0 ? "#16a34a" : "#dc2626", fontWeight: 800 }}>
+                                {formatINR(dailyEarned)}
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 220 }}>{record.payrollRemark || "-"}</TableCell>
                             </TableRow>
                           );
                         })}
                       </TableBody>
                     </Table>
                   </TableContainer>
+                  <Grid container spacing={3} sx={{ mt: 3 }}>
+                    <Grid item xs={12} md={7}>
+                      <Paper sx={{ ...styles.panel, p: 3 }}>
+                        <Typography sx={{ fontWeight: 800, color: "#0f172a", mb: 2 }}>
+                          Month to Date Summary ({monthLabel})
+                        </Typography>
+                        <Grid container spacing={1.5}>
+                          {[
+                            ["Total Days", monthToDateSummary.total],
+                            ["Present Days", monthToDateSummary.present],
+                            ["Week Off Days", monthToDateSummary.weekOff],
+                            ["Public Holidays", monthToDateSummary.holiday],
+                            ["CL Approved", monthToDateSummary.clApproved],
+                            ["CL Pending", monthToDateSummary.pending],
+                            ["Absent / LOP", monthToDateSummary.lop],
+                          ].map(([label, value]) => (
+                            <Grid item xs={6} sm={4} key={label}>
+                              <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                                <Typography sx={{ color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}>{label}</Typography>
+                                <Typography sx={{ fontWeight: 900, color: "#0f172a", fontSize: "1.2rem" }}>{value}</Typography>
+                              </Box>
+                            </Grid>
+                          ))}
+                        </Grid>
+                        <Box sx={{ display: "grid", gap: 1.2, mt: 2.5 }}>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Base Salary Earned</Typography>
+                            <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Late Deduction</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#dc2626" }}>-{formatINR(totalLateDeduction)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Overtime Amount</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#16a34a" }}>+{formatINR(totalOvertimeAmount || overtimeSalary)}</Typography>
+                          </Box>
+                        </Box>
+                      </Paper>
+                    </Grid>
+                    <Grid item xs={12} md={5}>
+                      <Paper sx={{ ...styles.panel, p: 3, borderTop: "4px solid #0f5ea8" }}>
+                        <Typography sx={{ fontWeight: 800, color: "#0f172a", mb: 2 }}>
+                          {data.payrollStatus === "Ready" ? "Final Net Salary" : "Estimated Net Salary (Till Date)"}
+                        </Typography>
+                        <Box sx={{ display: "grid", gap: 1.2 }}>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Total Earned Salary</Typography>
+                            <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary || backendEstimatedSalary)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Additional Allowances</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#16a34a" }}>+{formatINR(additionalAllowancesTotal)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Other Deductions</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#dc2626" }}>-{formatINR(parseNumber(paymentDetails.advance) + parseNumber(paymentDetails.others) + lopDeductionAmount + includedLateAmount)}</Typography>
+                          </Box>
+                          <Box sx={{ borderTop: "1px solid #e2e8f0", pt: 1.5, mt: 0.5, ...summaryRowSx }}>
+                            <Typography sx={{ ...summaryLabelSx, fontWeight: 900 }}>Current Net Salary</Typography>
+                            <Typography sx={{ ...summaryValueSx, fontWeight: 900, color: "#0f5ea8", fontSize: "1.25rem" }}>{formatINR(finalNetSalary)}</Typography>
+                          </Box>
+                          <Typography sx={{ color: "#64748b", fontSize: "0.86rem", mt: 1 }}>
+                            Final Net Salary will be calculated at the end of the month.
+                          </Typography>
+                        </Box>
+                      </Paper>
+                    </Grid>
+                  </Grid>
                   </>
                 )}
               </Box>

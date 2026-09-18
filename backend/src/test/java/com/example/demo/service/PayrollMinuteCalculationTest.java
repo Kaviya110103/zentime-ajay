@@ -148,6 +148,8 @@ class PayrollMinuteCalculationTest {
         assertThat(todayRow.get("payrollPending")).isEqualTo(true);
         assertThat(todayRow.get("payableMinutes")).isEqualTo(0);
         assertThat(todayRow.get("dayEarnedAmount")).isEqualTo(BigDecimal.ZERO.setScale(2));
+        assertThat(todayRow.get("dailyEarnedSalary")).isEqualTo(BigDecimal.ZERO.setScale(2));
+        assertThat(todayRow.get("payrollRemark")).isEqualTo("Time Out pending");
     }
     @Test void tenantMismatchCannotCalculatePayroll() {
         assertThatThrownBy(() -> service.calculateMonthlyPayroll(1L, 8, 2026, 2L)).isInstanceOf(IllegalArgumentException.class);
@@ -157,6 +159,21 @@ class PayrollMinuteCalculationTest {
         var result = calculate();
         BigDecimal total = result.dailyRows().stream().map(r -> (BigDecimal) r.get("dayEarnedAmount")).reduce(BigDecimal.ZERO, BigDecimal::add);
         assertThat(total).isEqualByComparingTo("15000");
+    }
+    @Test void dailyRowsExposePayrollDashboardAmountsAndRemarks() {
+        records.get(0).setTimeIn(records.get(0).getTimeIn().plusMinutes(20));
+        var request = new OvertimeRequest(); request.setDate("01/08/2026"); request.setOvertimeHours(0.5);
+        records.get(0).setTimeOut(records.get(0).getTimeOut().plusMinutes(30));
+        when(overtime.findByEmployeeIdAndStatus(1L, OvertimeRequestStatus.APPROVED)).thenReturn(List.of(request));
+
+        var result = calculate();
+        Map<String, Object> row = result.dailyRows().get(0);
+
+        assertThat(row.get("perDaySalaryAmount")).isInstanceOf(BigDecimal.class);
+        assertThat(row.get("lateDeductionAmount")).isEqualTo(new BigDecimal("20.00"));
+        assertThat(row.get("overtimeAmount")).isEqualTo(new BigDecimal("30.00"));
+        assertThat(row.get("dailyEarnedSalary")).isInstanceOf(BigDecimal.class);
+        assertThat(String.valueOf(row.get("payrollRemark"))).contains("20 min late", "30 min overtime");
     }
     @Test void overtimeIsCappedToApprovedMinutesAndNotIncludedTwiceInBasic() {
         records.get(0).setTimeOut(records.get(0).getTimeOut().plusHours(1));
