@@ -215,6 +215,8 @@ public class PayrollCalculationService {
         if (scheduledWorkingMinutes <= 0) throw new IllegalStateException("Payroll review required: no scheduled minutes");
         if (!Double.isFinite(salary) || salary < 0) throw new IllegalStateException("Payroll review required: invalid salary");
         BigDecimal monthlySalary = BigDecimal.valueOf(salary);
+        double perDaySalary = scheduledWorkingDays > 0 ? salary / scheduledWorkingDays : 0.0;
+        BigDecimal baseDailySalary = BigDecimal.valueOf(perDaySalary).setScale(2, RoundingMode.HALF_UP);
         int attendancePresentMinutesTotal = 0;
         int payableRegularMinutes = 0;
         int eligibleScheduledMinutes = 0;
@@ -248,17 +250,20 @@ public class PayrollCalculationService {
             day.put("approvedOvertimeMinutes", ot);
             int unpaidMissing = Math.max(0, scheduledMinutes - payable);
             int lateMinutes = Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
-            BigDecimal perDaySalaryAmount = scheduledMinutes > 0
-                    ? moneyForMinutes(monthlySalary, scheduledMinutes, scheduledWorkingMinutes)
-                    : BigDecimal.ZERO.setScale(2);
-            BigDecimal lateDeductionAmount = moneyForMinutes(monthlySalary, lateMinutes, scheduledWorkingMinutes);
+            boolean weekOffPaid = objectBoolean(day.get("weekOff"));
+            boolean holidayPaid = objectBoolean(day.get("holiday")) || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
+            boolean presentWithClosedPunch = payable > 0 && hasValue(day.get("timeIn")) && hasValue(day.get("timeOut"));
+            boolean paidPayrollDay = presentWithClosedPunch || paidLeave || weekOffPaid || holidayPaid;
+            int dailyRateMinutes = scheduledMinutes > 0 ? scheduledMinutes : normalShiftMinutes;
+            BigDecimal lateDeductionAmount = moneyForMinutes(baseDailySalary, lateMinutes, Math.max(1, dailyRateMinutes));
             day.put("unpaidMissingMinutes", unpaidMissing);
-            day.put("perDaySalaryAmount", perDaySalaryAmount);
-            day.put("perDaySalary", perDaySalaryAmount);
+            day.put("perDaySalaryAmount", baseDailySalary);
+            day.put("perDaySalary", baseDailySalary);
             day.put("lateDeductionAmount", lateDeductionAmount);
             day.put("lateDeduction", lateDeductionAmount);
             day.put("dayEarnedAmount", moneyForMinutes(monthlySalary, payable, scheduledWorkingMinutes));
-            day.put("overtimeAmount", moneyForMinutes(monthlySalary, ot, scheduledWorkingMinutes));
+            day.put("overtimeAmount", moneyForMinutes(baseDailySalary, ot, Math.max(1, dailyRateMinutes)));
+            day.put("paidPayrollDay", paidPayrollDay);
             day.put("payrollRemark", buildPayrollRemark(day, paidLeave, payable, scheduledMinutes, lateMinutes, ot, unpaidMissing));
             dailyRows.add(day);
         }
@@ -288,7 +293,6 @@ public class PayrollCalculationService {
 
         double perMinuteSalary = scheduledWorkingMinutes > 0 ? salary / scheduledWorkingMinutes : 0.0;
         double perHourSalary = perMinuteSalary * 60.0;
-        double perDaySalary = scheduledWorkingDays > 0 ? salary / scheduledWorkingDays : 0.0;
         int unpaidMissingMinutes = Math.max(0, absentMinutes - totalLateMinutes);
         BigDecimal proratedBasic = moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes);
         BigDecimal lateAmount = moneyForMinutes(monthlySalary, totalLateMinutes, scheduledWorkingMinutes);
@@ -298,7 +302,7 @@ public class PayrollCalculationService {
         BigDecimal overtimeAmount = moneyForMinutes(monthlySalary, overtimeMinutes, scheduledWorkingMinutes);
         reconcileDailyAmounts(dailyRows, "overtimeAmount", overtimeAmount);
         for (Map<String, Object> row : dailyRows) {
-            BigDecimal dayEarned = (BigDecimal) row.getOrDefault("dayEarnedAmount", BigDecimal.ZERO.setScale(2));
+            BigDecimal dayEarned = objectBoolean(row.get("paidPayrollDay")) ? baseDailySalary : BigDecimal.ZERO.setScale(2);
             BigDecimal lateDeduction = (BigDecimal) row.getOrDefault("lateDeductionAmount", BigDecimal.ZERO.setScale(2));
             BigDecimal dayOvertime = (BigDecimal) row.getOrDefault("overtimeAmount", BigDecimal.ZERO.setScale(2));
             row.put("dailyEarnedSalary", dayEarned.subtract(lateDeduction).add(dayOvertime));
