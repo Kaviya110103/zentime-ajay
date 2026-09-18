@@ -189,12 +189,12 @@ public class AttendanceClassificationService {
         boolean effectiveWeekOff = shiftWindow.weekOff();
         boolean scheduledWorkingDay = shiftWindow.scheduledWorkingDay();
         boolean nonWorkingDisplayDay = holiday || effectiveWeekOff;
-        int workedMinutes = calculateWorkedMinutes(source, timeIn, timeOut);
-        int lateMinutes = calculateLateMinutes(shiftWindow, timeIn);
-        int earlyOutMinutes = calculateEarlyOutMinutes(shiftWindow, timeOut);
-        int calculatedMissedMinutes = shiftWindow.expectedMinutes() > 0 && hasPunch
-                ? lateMinutes + earlyOutMinutes
-                : Math.max(0, number(source.get("missedTimes")));
+        AttendanceMinuteCalculator.Minutes minutes = AttendanceMinuteCalculator.calculate(
+                recordDate, shiftWindow, timeIn, timeOut);
+        int workedMinutes = minutes.worked();
+        int lateMinutes = minutes.late();
+        int earlyOutMinutes = minutes.early();
+        Integer calculatedMissedMinutes = minutes.missed();
 
         boolean markedPresent = normalizedStatus.contains("present")
                 || normalizedDayStatus.contains("present")
@@ -246,7 +246,7 @@ public class AttendanceClassificationService {
                 || "Leave".equals(countStatus)
                 || "Half Day".equals(countStatus);
         String payableStatus = payable ? "Payable" : "Unpaid";
-        int payableMinutes = calculatePayableMinutes(countStatus, workedMinutes, lateMinutes);
+        int payableMinutes = "Present".equals(countStatus) ? workedMinutes : 0;
 
         record.put("employee", employee);
         record.put("displayStatus", displayStatus);
@@ -263,6 +263,11 @@ public class AttendanceClassificationService {
         record.put("expectedShiftEnd", shiftWindow.expectedShiftEndText());
         record.put("expectedMinutes", shiftWindow.expectedMinutes());
         record.put("workedMinutes", workedMinutes);
+        record.put("workedHours", workedMinutes / 60.0);
+        record.put("workingDurationDisplay", (workedMinutes / 60) + "h " + (workedMinutes % 60) + "m");
+        record.put("reviewRequired", minutes.reviewReason() != null);
+        record.put("reviewReason", minutes.reviewReason());
+        record.put("candidateOvertimeMinutes", minutes.overtime());
         record.put("lateMinutes", lateMinutes);
         record.put("earlyOutMinutes", earlyOutMinutes);
         record.put("payableMinutes", payableMinutes);
@@ -346,44 +351,6 @@ public class AttendanceClassificationService {
             }
         }
         return asLong(employeeId);
-    }
-
-    private int calculateWorkedMinutes(Map<String, Object> record, LocalDateTime timeIn, LocalDateTime timeOut) {
-        int workedHoursMinutes = (int) Math.round(Math.max(0.0, decimal(record.get("workedHours"))) * 60.0);
-        if (workedHoursMinutes > 0) {
-            return workedHoursMinutes;
-        }
-        if (timeIn == null || timeOut == null || !timeOut.isAfter(timeIn)) {
-            return 0;
-        }
-        return (int) Duration.between(timeIn, timeOut).toMinutes();
-    }
-
-    private int calculateLateMinutes(ShiftResolverService.ShiftResolution window, LocalDateTime timeIn) {
-        if (window.expectedMinutes() <= 0
-                || window.expectedShiftStart() == null
-                || timeIn == null
-                || !timeIn.toLocalTime().isAfter(window.expectedShiftStart())) {
-            return 0;
-        }
-        return (int) Duration.between(window.expectedShiftStart(), timeIn.toLocalTime()).toMinutes();
-    }
-
-    private int calculateEarlyOutMinutes(ShiftResolverService.ShiftResolution window, LocalDateTime timeOut) {
-        if (window.expectedMinutes() <= 0
-                || window.expectedShiftEnd() == null
-                || timeOut == null
-                || !timeOut.toLocalTime().isBefore(window.expectedShiftEnd())) {
-            return 0;
-        }
-        return (int) Duration.between(timeOut.toLocalTime(), window.expectedShiftEnd()).toMinutes();
-    }
-
-    private int calculatePayableMinutes(String countStatus, int workedMinutes, int lateMinutes) {
-        if (!"Present".equalsIgnoreCase(text(countStatus))) {
-            return 0;
-        }
-        return Math.max(0, Math.max(0, workedMinutes) - Math.max(0, lateMinutes));
     }
 
     private LocalDate parseDate(String raw) {

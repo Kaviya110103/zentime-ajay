@@ -37,6 +37,9 @@ public class EmployeeSalaryDetailsController {
     @Autowired
     private SchemaMaintenanceService schemaMaintenanceService;
 
+    @Autowired
+    private com.example.demo.service.PayrollCalculationService payrollCalculationService;
+
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @PostMapping("/calculate")
@@ -45,7 +48,12 @@ public class EmployeeSalaryDetailsController {
             @RequestParam(value = "clientId", required = false) Long clientId,
             @RequestParam String position,
             @RequestParam String branch,
-            @RequestParam Double salary,
+            @RequestParam(required = false) Double salary,
+            @RequestParam int month,
+            @RequestParam int year,
+            @RequestParam(defaultValue = "true") boolean includeOvertime,
+            @RequestParam(defaultValue = "true") boolean applyLateDeduction,
+            @RequestParam(defaultValue = "false") boolean preview,
             @RequestParam(required = false, defaultValue = "0") Double convienceAmount,
             @RequestParam(required = false, defaultValue = "0") Double incentive,
             @RequestParam(required = false, defaultValue = "0") Double overTime,
@@ -63,16 +71,24 @@ public class EmployeeSalaryDetailsController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
         Long resolvedEmployeeId = employeeOpt.get().getId();
+        var payroll = payrollCalculationService.calculateMonthlyPayroll(resolvedEmployeeId, month, year, clientId);
+        salary = payroll.estimatedNetSalary();
+        overTime = includeOvertime ? payroll.overtimeAmount().doubleValue() : 0.0;
+        int unpaidMissingMinutes = lossOfPay == null
+                ? payroll.unpaidMissingMinutes()
+                : Math.max(0, (int) Math.round(lossOfPay));
+        double unpaidMissingAmount = amountForMinutes(payroll.estimatedNetSalary(), unpaidMissingMinutes, payroll.scheduledWorkingMinutes());
+        double lateAmount = applyLateDeduction ? payroll.lateAmount().doubleValue() : 0.0;
 
         double resolvedAdditionalTotal = resolveAdditionalAllowancesTotal(
                 additionalAllowancesTotal,
                 additionalAllowancesJson);
-        double resolvedPfAmount = resolvePfAmount(salary, pfAmount, pfPercentage);
+        double resolvedPfAmount = resolvePfAmount(payroll.basicSalary(), pfAmount, pfPercentage);
         double normalizedSalary = roundCurrency(salary == null ? 0.0 : salary);
         double normalizedConvenience = roundCurrency(convienceAmount == null ? 0.0 : convienceAmount);
         double normalizedIncentive = roundCurrency(incentive == null ? 0.0 : incentive);
         double normalizedOverTime = roundCurrency(overTime == null ? 0.0 : overTime);
-        double normalizedLossOfPay = roundCurrency(lossOfPay == null ? 0.0 : lossOfPay);
+        double normalizedLossOfPay = roundCurrency(unpaidMissingAmount + lateAmount);
         double normalizedAdvance = roundCurrency(advance == null ? 0.0 : advance);
         double normalizedOthers = roundCurrency(others == null ? 0.0 : others);
         double normalizedAdditionalTotal = roundCurrency(resolvedAdditionalTotal);
@@ -108,7 +124,12 @@ public class EmployeeSalaryDetailsController {
 
         details.setNetSalary(netSalary.doubleValue());
 
-        salaryDetailsRepository.save(details);
+        if (!preview) {
+            if (!java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))) {
+                throw new IllegalStateException("Current or future month payroll is provisional; preview only");
+            }
+            salaryDetailsRepository.save(details);
+        }
         return ResponseEntity.ok(details);
     }
 
@@ -156,6 +177,16 @@ public class EmployeeSalaryDetailsController {
 
     private double roundCurrency(double value) {
         return toMoney(value).doubleValue();
+    }
+
+    private double amountForMinutes(double salary, int minutes, int denominator) {
+        if (minutes <= 0 || denominator <= 0 || salary <= 0) {
+            return 0.0;
+        }
+        return BigDecimal.valueOf(salary)
+                .multiply(BigDecimal.valueOf(minutes))
+                .divide(BigDecimal.valueOf(denominator), 2, RoundingMode.HALF_UP)
+                .doubleValue();
     }
 
     private BigDecimal toMoney(double value) {

@@ -70,9 +70,6 @@ public class PayrollController {
         Optional<Employee> employeeOpt = clientId == null
                 ? employeeRepository.findById(employeeId)
                 : employeeRepository.findByIdAndClientId(employeeId, clientId);
-        if (employeeOpt.isEmpty() && clientId != null) {
-            employeeOpt = employeeRepository.findById(employeeId);
-        }
         Employee employee = employeeOpt.orElse(null);
         if (employee == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Employee not found");
@@ -83,13 +80,8 @@ public class PayrollController {
         }
         double salary = employee.getSalary() == null ? 0.0 : employee.getSalary();
 
-        PayrollCalculationService.PayrollResult result;
-        try {
-            result = payrollCalculationService.calculateMonthlyPayroll(employeeId, month, year, clientId);
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            result = PayrollCalculationService.PayrollResult.empty();
-        }
+        PayrollCalculationService.PayrollResult result =
+                payrollCalculationService.calculateMonthlyPayroll(employeeId, month, year, clientId);
 
         int daysInMonth = result.daysInMonth();
         double holidayTotalDays = result.publicHolidayDays();
@@ -193,18 +185,35 @@ public class PayrollController {
 
         Map<String, Object> salaryCalculation = new HashMap<>();
         salaryCalculation.put("basicSalary", result.basicSalary());
+        salaryCalculation.put("earnedSalary", result.estimatedNetSalary());
         salaryCalculation.put("scheduledWorkingMinutes", result.scheduledWorkingMinutes());
         salaryCalculation.put("payableWorkingMinutes", result.payableWorkingMinutes());
         salaryCalculation.put("perMinuteRate", result.perMinuteRate());
         salaryCalculation.put("estimatedNetSalary", result.estimatedNetSalary());
+        salaryCalculation.put("lateAmount", result.lateAmount());
+        salaryCalculation.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
+        salaryCalculation.put("unpaidMissingAmount", result.attendanceDeduction());
 
         response.put("expectedAttendance", expectedAttendance);
         response.put("actualAttendance", actualAttendance);
         response.put("salaryCalculation", salaryCalculation);
+        response.put("dailyRows", result.dailyRows());
+        Map<String, Long> attendanceSummary = new HashMap<>();
+        attendanceSummary.put("total", (long) result.dailyRows().size());
+        Map<String, String> summaryStatuses = Map.of("present", "Present", "absent", "Absent", "weekOff", "Week Off", "holiday", "Holiday");
+        summaryStatuses.forEach((key, value) -> attendanceSummary.put(key,
+                result.dailyRows().stream().filter(row -> value.equals(row.get("countStatus"))).count()));
+        response.put("attendanceSummary", attendanceSummary);
+        response.put("overtimeAmount", result.overtimeAmount());
+        response.put("proratedBasic", result.proratedBasic());
+        response.put("lateAmount", result.lateAmount());
+        response.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
+        response.put("attendanceDeduction", result.attendanceDeduction());
+        response.put("payrollStatus", java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))
+                ? "Ready" : "Provisional");
         response.put("additionalWorkingDaysCount", result.additionalWorkingDays());
         if (debug) {
-            response.put("debugDays",
-                    payrollCalculationService.calculateMonthlyPayrollDebug(employeeId, month, year, clientId));
+            response.put("debugDays", result.dailyRows());
         }
 
         return ResponseEntity.ok(response);

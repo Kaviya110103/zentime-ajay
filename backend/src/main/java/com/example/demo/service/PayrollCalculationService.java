@@ -16,9 +16,12 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 @Service
 public class PayrollCalculationService {
@@ -72,12 +75,32 @@ public class PayrollCalculationService {
         }
 
         Employee employee = employeeOpt.get();
+        if (clientIdOverride != null && !clientIdOverride.equals(employee.getClientId())) {
+            throw new IllegalArgumentException("Employee does not belong to this client");
+        }
         Long effectiveClientId = clientIdOverride != null ? clientIdOverride : employee.getClientId();
         LocalDate firstDate = LocalDate.of(year, month, 1);
         LocalDate lastDate = firstDate.withDayOfMonth(firstDate.lengthOfMonth());
         LeaveAllowancePolicy leaveAllowancePolicy = resolveLeaveAllowancePolicy(employee);
         int daysInMonth = firstDate.lengthOfMonth();
         int normalShiftMinutes = resolveNormalShiftMinutes(employee);
+
+        LocalDate joiningDate = parseJoiningDate(employee.getDateOfJoining());
+        List<AttendanceRecord> monthRecords = attendanceRecordRepository.findByEmployeeId(employeeId).stream()
+                .filter(record -> {
+                    LocalDate date = record == null ? null : parseDbDate(record.getDate());
+                    return date != null && date.getYear() == year && date.getMonthValue() == month;
+                }).toList();
+        List<Map<String, Object>> classifiedRecords = attendanceClassificationService.classifyRecords(monthRecords, effectiveClientId);
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        Map<LocalDate, Map<String, Object>> actualByDate = new HashMap<>();
+        for (Map<String, Object> row : classifiedRecords) {
+            LocalDate date = parseDbDate(String.valueOf(row.get("date")));
+            row = normalizeCurrentOpenPunch(row, date, today);
+            if (actualByDate.putIfAbsent(date, row) != null) {
+                throw new IllegalStateException("Payroll review required: duplicate attendance date " + date);
+            }
+        }
 
         List<Map<String, Object>> calendarRows =
                 attendanceClassificationService.classifyCalendar(employee, firstDate, lastDate, effectiveClientId);
@@ -86,12 +109,18 @@ public class PayrollCalculationService {
         int additionalWorkingDays = 0;
         int classifiedScheduledDayCount = 0;
         int classifiedScheduledMinutesTotal = 0;
-        for (Map<String, Object> row : calendarRows) {
+        for (int index = 0; index < calendarRows.size(); index++) {
+            Map<String, Object> row = calendarRows.get(index);
             LocalDate date = parseDbDate(String.valueOf(row.getOrDefault("date", "")));
             if (date == null) {
                 continue;
             }
+            // Recorded shift snapshots also determine the monthly denominator.
+            row = actualByDate.getOrDefault(date, row);
             int expectedMinutes = Math.max(0, objectInt(row.get("expectedMinutes")));
+            if (objectBoolean(row.get("reviewRequired"))) {
+                throw new IllegalStateException("Payroll review required for " + date + ": " + row.get("reviewReason"));
+            }
             scheduledMinutesByDate.put(date, expectedMinutes);
             if (expectedMinutes > 0) {
                 classifiedScheduledDayCount++;
@@ -122,48 +151,20 @@ public class PayrollCalculationService {
         leaveBuckets.applyCasualBalance(scheduledMinutesByDate, casualBalance);
         int clUtilizedDays = leaveBuckets.paidCasualDates.size() + leaveBuckets.unpaidCasualDates.size();
 
-        WorkSummary workSummary =
-                buildWorkedMinutesByDate(employee, month, year);
-        Map<LocalDate, Integer> workedMinutesByDate = workSummary.workedMinutesByDate;
-        Map<LocalDate, Integer> supportApprovedMinutesByDate =
-                buildSupportApprovedMinutesByDate(employeeId, month, year);
-        List<AttendanceRecord> monthRecords = attendanceRecordRepository.findByEmployeeId(employeeId).stream()
-                .filter(record -> {
-                    LocalDate date = record == null ? null : parseDbDate(record.getDate());
-                    return date != null && date.getYear() == year && date.getMonthValue() == month;
-                })
-                .toList();
-        List<Map<String, Object>> classifiedRecords =
-                attendanceClassificationService.classifyRecords(monthRecords, effectiveClientId);
-
-        int overtimeMinutes = 0;
-        for (Map.Entry<LocalDate, Integer> entry : workedMinutesByDate.entrySet()) {
-            LocalDate date = entry.getKey();
-            WorkEntry workEntry = workSummary.workEntries.get(date);
-            ShiftWindow window = resolveClassificationShiftWindow(calendarRows, date);
-            if (workEntry != null
-                    && workEntry.recordedOvertimeMinutes > 0
-                    && workSummary.overtimeApprovedDates.contains(date)) {
-                overtimeMinutes += workEntry.recordedOvertimeMinutes;
-                continue;
-            }
-            if (window == null || window.minutes <= 0) {
-                continue; // Week-off work counts as regular payable, not overtime.
-            }
-            if (!workSummary.overtimeApprovedDates.contains(date)) {
-                continue;
-            }
-            if (workEntry == null || workEntry.earliestTimeInTime == null || workEntry.latestTimeOutTime == null) {
-                continue;
-            }
-            LocalTime actualOutTime = workEntry.latestTimeOutTime;
-            if (actualOutTime.isAfter(window.end)) {
-                LocalTime overtimeStart = workEntry.earliestTimeInTime.isAfter(window.end)
-                        ? workEntry.earliestTimeInTime
-                        : window.end;
-                overtimeMinutes += (int) Duration.between(overtimeStart, actualOutTime).toMinutes();
+        Map<LocalDate, Integer> approvedOtLimits = new HashMap<>();
+        for (AttendanceRecord record : monthRecords) {
+            if (Boolean.TRUE.equals(record.getOvertimeApproved())) {
+                approvedOtLimits.merge(parseDbDate(record.getDate()), resolveRecordedOvertimeMinutes(record), Math::max);
             }
         }
+        for (OvertimeRequest request : overtimeRequestRepository.findByEmployeeIdAndStatus(employeeId, OvertimeRequestStatus.APPROVED)) {
+            if (request.getOvertimeHours() != null && request.getOvertimeHours() > 0) {
+                approvedOtLimits.merge(parseDbDate(request.getDate()), (int) Math.round(request.getOvertimeHours() * 60), Math::max);
+            }
+        }
+        Map<LocalDate, Integer> supportApprovedMinutesByDate =
+                buildSupportApprovedMinutesByDate(employeeId, month, year);
+        int overtimeMinutes = 0;
 
         Set<LocalDate> presentWorkingDates = new HashSet<>();
         Set<LocalDate> lateDates = new HashSet<>();
@@ -175,9 +176,11 @@ public class PayrollCalculationService {
             if (date == null) {
                 continue;
             }
+            row = normalizeCurrentOpenPunch(row, date, today);
+            if (joiningDate != null && date.isBefore(joiningDate)) continue;
             String countStatus = String.valueOf(row.getOrDefault("countStatus", ""));
             int workedMinutes = Math.max(0, objectInt(row.get("workedMinutes")));
-            int missedMinutes = Math.max(0, objectInt(row.get("calculatedMissedMinutes")));
+            int missedMinutes = Math.max(0, objectInt(row.get("lateMinutes")));
             int payableMinutes = Math.max(0, objectInt(row.get("payableMinutes")));
             if ("Present".equalsIgnoreCase(countStatus)) {
                 presentWorkingDates.add(date);
@@ -194,34 +197,78 @@ public class PayrollCalculationService {
             }
         }
 
-        int approvedPermissionMinutes = Math.max(
-                calculateApprovedPermissionMinutes(employeeId, month, year),
-                workSummary.totalPermissionUsedMinutes());
+        int approvedPermissionMinutes = 0;
+        Set<LocalDate> paidDates = new HashSet<>(leaveBuckets.paidLeaveDates);
+        paidDates.addAll(leaveBuckets.paidCasualDates);
+        Map<LocalDate, Map<String, Object>> permissionSchedule = new HashMap<>();
+        for (Map<String, Object> row : calendarRows) {
+            LocalDate date = parseDbDate(String.valueOf(row.get("date")));
+            if (date != null) permissionSchedule.put(date, row);
+        }
+        permissionSchedule.putAll(actualByDate);
+        Map<LocalDate, Integer> permissionCredits = permissionCredits(employee, monthRecords, permissionSchedule, paidDates, month, year);
 
+        if (employee.getSalary() == null) throw new IllegalStateException("Payroll review required: missing salary");
         double salary = employee.getSalary() == null ? 0.0 : employee.getSalary();
-        double scheduledWorkingDays = Math.max(0.0, classifiedScheduledDayCount - casualBalance);
-        int scheduledWorkingMinutes = Math.max(
-                0,
-                classifiedScheduledMinutesTotal - (casualBalance * normalShiftMinutes));
+        double scheduledWorkingDays = classifiedScheduledDayCount;
+        int scheduledWorkingMinutes = classifiedScheduledMinutesTotal;
+        if (scheduledWorkingMinutes <= 0) throw new IllegalStateException("Payroll review required: no scheduled minutes");
+        if (!Double.isFinite(salary) || salary < 0) throw new IllegalStateException("Payroll review required: invalid salary");
+        BigDecimal monthlySalary = BigDecimal.valueOf(salary);
+        double perDaySalary = scheduledWorkingDays > 0 ? salary / scheduledWorkingDays : 0.0;
+        BigDecimal baseDailySalary = BigDecimal.valueOf(perDaySalary).setScale(2, RoundingMode.HALF_UP);
         int attendancePresentMinutesTotal = 0;
         int payableRegularMinutes = 0;
-        int nonScheduledWorkedMinutes = 0;
+        int eligibleScheduledMinutes = 0;
+        List<Map<String, Object>> dailyRows = new ArrayList<>();
         for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
+            if (joiningDate != null && date.isBefore(joiningDate)) continue;
             int scheduledMinutes = Math.max(0, scheduledMinutesByDate.getOrDefault(date, 0));
+            eligibleScheduledMinutes += scheduledMinutes;
             int workedMinutes = classifiedWorkedMinutesByDate.getOrDefault(date, 0);
             attendancePresentMinutesTotal += workedMinutes;
             int configuredSupportMinutes = supportApprovedMinutesByDate.getOrDefault(date, 0);
-            if (scheduledMinutes > 0) {
-                payableRegularMinutes += Math.min(scheduledMinutes, workedMinutes + configuredSupportMinutes);
-            } else if (workedMinutes > 0) {
-                nonScheduledWorkedMinutes += workedMinutes;
+            // Support credits without an interval cannot safely be combined with an existing punch.
+            if (configuredSupportMinutes > 0 && workedMinutes > 0) {
+                throw new IllegalStateException("Payroll review required: overlapping support credit on " + date);
             }
+            boolean paidLeave = leaveBuckets.paidLeaveDates.contains(date) || leaveBuckets.paidCasualDates.contains(date);
+            int permission = paidLeave ? 0 : Math.min(permissionCredits.getOrDefault(date, 0), Math.max(0, scheduledMinutes - workedMinutes));
+            approvedPermissionMinutes += permission;
+            int payable = paidLeave ? scheduledMinutes : Math.min(scheduledMinutes, workedMinutes + Math.max(configuredSupportMinutes, permission));
+            payableRegularMinutes += payable;
+            Map<String, Object> actual = actualByDate.get(date);
+            int ot = actual == null ? 0 : Math.min(objectInt(actual.get("candidateOvertimeMinutes")), approvedOtLimits.getOrDefault(date, 0));
+            overtimeMinutes += ot;
+            Map<String, Object> day = new LinkedHashMap<>();
+            if (actual != null) day.putAll(actual);
+            else for (Map<String, Object> calendarRow : calendarRows) {
+                if (date.equals(parseDbDate(String.valueOf(calendarRow.get("date"))))) { day.putAll(calendarRow); break; }
+            }
+            day.put("paidCreditMinutes", Math.max(0, payable - workedMinutes));
+            day.put("payableMinutes", payable);
+            day.put("approvedOvertimeMinutes", ot);
+            int unpaidMissing = Math.max(0, scheduledMinutes - payable);
+            int lateMinutes = Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
+            boolean weekOffPaid = objectBoolean(day.get("weekOff"));
+            boolean holidayPaid = objectBoolean(day.get("holiday")) || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
+            boolean presentWithClosedPunch = payable > 0 && hasValue(day.get("timeIn")) && hasValue(day.get("timeOut"));
+            boolean paidPayrollDay = presentWithClosedPunch || paidLeave || weekOffPaid || holidayPaid;
+            int dailyRateMinutes = scheduledMinutes > 0 ? scheduledMinutes : normalShiftMinutes;
+            BigDecimal lateDeductionAmount = moneyForMinutes(baseDailySalary, lateMinutes, Math.max(1, dailyRateMinutes));
+            day.put("unpaidMissingMinutes", unpaidMissing);
+            day.put("perDaySalaryAmount", baseDailySalary);
+            day.put("perDaySalary", baseDailySalary);
+            day.put("lateDeductionAmount", lateDeductionAmount);
+            day.put("lateDeduction", lateDeductionAmount);
+            day.put("dayEarnedAmount", moneyForMinutes(monthlySalary, payable, scheduledWorkingMinutes));
+            day.put("overtimeAmount", moneyForMinutes(baseDailySalary, ot, Math.max(1, dailyRateMinutes)));
+            day.put("paidPayrollDay", paidPayrollDay);
+            day.put("payrollRemark", buildPayrollRemark(day, paidLeave, payable, scheduledMinutes, lateMinutes, ot, unpaidMissing));
+            dailyRows.add(day);
         }
-        int paidLeaveMinutes = (leaveBuckets.paidLeaveDates.size() + leaveBuckets.paidCasualDates.size()) * normalShiftMinutes;
-        int payableScheduledMinutes = Math.min(
-                scheduledWorkingMinutes,
-                payableRegularMinutes + approvedPermissionMinutes + paidLeaveMinutes);
-        int payableWorkingMinutes = Math.max(0, payableScheduledMinutes + nonScheduledWorkedMinutes + overtimeMinutes);
+        int payableScheduledMinutes = payableRegularMinutes;
+        int payableWorkingMinutes = payableScheduledMinutes;
 
         int expectedWorkingDays = (int) Math.round(scheduledWorkingDays);
         int workedDays = presentWorkingDates.size();
@@ -233,7 +280,7 @@ public class PayrollCalculationService {
                 .filter(Objects::nonNull)
                 .mapToInt(Integer::intValue)
                 .sum();
-        int absentMinutes = Math.max(0, scheduledWorkingMinutes - payableScheduledMinutes);
+        int absentMinutes = Math.max(0, eligibleScheduledMinutes - payableScheduledMinutes);
         int absentDays = normalShiftMinutes > 0
                 ? (int) Math.ceil(absentMinutes / (double) normalShiftMinutes)
                 : 0;
@@ -246,8 +293,20 @@ public class PayrollCalculationService {
 
         double perMinuteSalary = scheduledWorkingMinutes > 0 ? salary / scheduledWorkingMinutes : 0.0;
         double perHourSalary = perMinuteSalary * 60.0;
-        double perDaySalary = scheduledWorkingDays > 0 ? salary / scheduledWorkingDays : 0.0;
-        double netSalary = roundMoney(perMinuteSalary * payableWorkingMinutes);
+        int unpaidMissingMinutes = Math.max(0, absentMinutes - totalLateMinutes);
+        BigDecimal proratedBasic = moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes);
+        BigDecimal lateAmount = moneyForMinutes(monthlySalary, totalLateMinutes, scheduledWorkingMinutes);
+        BigDecimal unpaidMissingAmount = moneyForMinutes(monthlySalary, unpaidMissingMinutes, scheduledWorkingMinutes);
+        double netSalary = proratedBasic.subtract(unpaidMissingAmount).doubleValue();
+        reconcileDailyAmounts(dailyRows, "dayEarnedAmount", proratedBasic);
+        BigDecimal overtimeAmount = moneyForMinutes(monthlySalary, overtimeMinutes, scheduledWorkingMinutes);
+        reconcileDailyAmounts(dailyRows, "overtimeAmount", overtimeAmount);
+        for (Map<String, Object> row : dailyRows) {
+            BigDecimal dayEarned = objectBoolean(row.get("paidPayrollDay")) ? baseDailySalary : BigDecimal.ZERO.setScale(2);
+            BigDecimal lateDeduction = (BigDecimal) row.getOrDefault("lateDeductionAmount", BigDecimal.ZERO.setScale(2));
+            BigDecimal dayOvertime = (BigDecimal) row.getOrDefault("overtimeAmount", BigDecimal.ZERO.setScale(2));
+            row.put("dailyEarnedSalary", dayEarned.subtract(lateDeduction).add(dayOvertime));
+        }
 
         double expectedHours = minutesToHours(scheduledWorkingMinutes);
         double payableHours = minutesToHours(payableWorkingMinutes);
@@ -287,7 +346,7 @@ public class PayrollCalculationService {
                 payablePresentDays,
                 absentPayableDays,
                 perDaySalary,
-                roundMoney(perMinuteSalary),
+                perMinuteSalary,
                 perHourSalary,
                 missingHours,
                 netSalary,
@@ -303,9 +362,150 @@ public class PayrollCalculationService {
                 scheduledWorkingMinutes,
                 payableWorkingMinutes,
                 salary,
-                roundMoney(perMinuteSalary),
-                netSalary,
-                additionalWorkingDays);
+                perMinuteSalary,
+                proratedBasic.doubleValue(),
+                additionalWorkingDays, dailyRows, overtimeAmount,
+                proratedBasic,
+                unpaidMissingAmount,
+                lateAmount,
+                unpaidMissingMinutes);
+    }
+
+    private Map<String, Object> normalizeCurrentOpenPunch(Map<String, Object> row, LocalDate date, LocalDate today) {
+        if (row == null || date == null || today == null || !date.equals(today)) {
+            return row;
+        }
+        if (!objectBoolean(row.get("reviewRequired")) || !hasValue(row.get("timeIn")) || hasValue(row.get("timeOut"))) {
+            return row;
+        }
+        Map<String, Object> pending = new LinkedHashMap<>(row);
+        pending.put("displayStatus", "Pending");
+        pending.put("countStatus", "Pending");
+        pending.put("payableStatus", "Pending");
+        pending.put("payable", false);
+        pending.put("payableMinutes", 0);
+        pending.put("workedMinutes", 0);
+        pending.put("workedHours", 0.0);
+        pending.put("workingDurationDisplay", "Pending");
+        pending.put("candidateOvertimeMinutes", 0);
+        pending.put("lateMinutes", 0);
+        pending.put("earlyOutMinutes", 0);
+        pending.put("calculatedMissedMinutes", 0);
+        pending.put("missedTimes", 0);
+        pending.put("reviewRequired", false);
+        pending.put("reviewReason", null);
+        pending.put("payrollPending", true);
+        pending.put("payrollPendingReason", "Time Out pending");
+        return pending;
+    }
+
+    private String buildPayrollRemark(Map<String, Object> day, boolean paidLeave, int payable, int scheduledMinutes,
+            int lateMinutes, int overtimeMinutes, int unpaidMissingMinutes) {
+        if (objectBoolean(day.get("payrollPending"))) {
+            return String.valueOf(day.getOrDefault("payrollPendingReason", "Time Out pending"));
+        }
+        String status = String.valueOf(day.getOrDefault("displayStatus", day.getOrDefault("countStatus", "")));
+        List<String> parts = new ArrayList<>();
+        if (objectBoolean(day.get("weekOff"))) {
+            parts.add("Weekly Off - Paid");
+        } else if ("Holiday".equalsIgnoreCase(status) || objectBoolean(day.get("holiday"))) {
+            parts.add("Public Holiday - Paid");
+        } else if (paidLeave) {
+            parts.add("Casual Leave - Paid");
+        } else if (payable > 0 && scheduledMinutes > 0) {
+            parts.add("Full day present");
+        } else if (unpaidMissingMinutes > 0 || "Absent".equalsIgnoreCase(status)) {
+            parts.add("Absent - LOP");
+        }
+        if (lateMinutes > 0) {
+            parts.add(lateMinutes + " min late");
+        }
+        if (overtimeMinutes > 0) {
+            parts.add(overtimeMinutes + " min overtime");
+        }
+        if (parts.isEmpty()) {
+            return status == null || status.isBlank() ? "-" : status;
+        }
+        return String.join(" | ", parts);
+    }
+
+    static BigDecimal moneyForMinutes(BigDecimal salary, int minutes, int denominator) {
+        return salary.multiply(BigDecimal.valueOf(minutes)).divide(BigDecimal.valueOf(denominator), 2, RoundingMode.HALF_UP);
+    }
+
+    private void reconcileDailyAmounts(List<Map<String, Object>> rows, String key, BigDecimal total) {
+        BigDecimal sum = rows.stream().map(row -> (BigDecimal) row.get(key)).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal difference = total.subtract(sum);
+        // Allocate the currency rounding residual once; daily displayed amounts then sum exactly.
+        for (int i = rows.size() - 1; i >= 0 && difference.signum() != 0; i--) {
+            Map<String, Object> row = rows.get(i);
+            BigDecimal amount = (BigDecimal) row.get(key);
+            String minutesKey = "overtimeAmount".equals(key) ? "approvedOvertimeMinutes" : "payableMinutes";
+            if (objectInt(row.get(minutesKey)) > 0) {
+                BigDecimal adjustment = difference.signum() > 0 ? difference : difference.max(amount.negate());
+                row.put(key, amount.add(adjustment));
+                row.put(key + "RoundingAdjustment", adjustment);
+                difference = difference.subtract(adjustment);
+            }
+        }
+    }
+
+    private LocalDate parseJoiningDate(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try { return LocalDate.parse(raw); }
+        catch (DateTimeParseException ignored) {
+            LocalDate date = parseDbDate(raw);
+            if (date == null) throw new IllegalStateException("Payroll review required: invalid joining date");
+            return date;
+        }
+    }
+
+    private Map<LocalDate, Integer> permissionCredits(Employee employee, List<AttendanceRecord> records,
+            Map<LocalDate, Map<String, Object>> rows, Set<LocalDate> paidDates, int month, int year) {
+        Map<LocalDate, BitSet> covered = new TreeMap<>();
+        for (LeavePermission leave : leavePermissionRepository.findByEmployeeIdAndStatus(employee.getId(), "approved")) {
+            if (!isPermissionType(leave.getLeaveType())) continue;
+            LocalDate date = parseDbDate(leave.getDate());
+            if (date == null) date = parseDbDate(leave.getStartDate());
+            if (date == null || date.getYear() != year || date.getMonthValue() != month) continue;
+            LocalDate joining = parseJoiningDate(employee.getDateOfJoining());
+            if (paidDates.contains(date) || (joining != null && date.isBefore(joining))) continue;
+            Map<String, Object> row = rows.get(date);
+            if (row == null || objectInt(row.get("expectedMinutes")) <= 0) continue;
+            Optional<LocalTime> start = parseFlexibleTime(leave.getStartTime());
+            Optional<LocalTime> end = parseFlexibleTime(leave.getEndTime());
+            Optional<LocalTime> shiftStart = parseFlexibleTime(String.valueOf(row.get("expectedShiftStart")));
+            if (start.isEmpty() || end.isEmpty() || shiftStart.isEmpty()) {
+                throw new IllegalStateException("Payroll review required: invalid permission time on " + date);
+            }
+            LocalDateTime shift = date.atTime(shiftStart.get());
+            LocalDateTime from = date.atTime(start.get());
+            LocalDateTime to = date.atTime(end.get());
+            if (!to.isAfter(from)) to = to.plusDays(1);
+            int expected = objectInt(row.get("expectedMinutes"));
+            LocalDateTime shiftEnd = shift.plusMinutes(expected);
+            if (shiftEnd.toLocalDate().isAfter(date) && !to.isAfter(shift)) {
+                from = from.plusDays(1); to = to.plusDays(1);
+            }
+            AttendanceRecord record = null;
+            for (AttendanceRecord candidate : records) if (date.equals(parseDbDate(candidate.getDate()))) { record = candidate; break; }
+            LocalDateTime in = record == null || record.getTimeIn() == null ? null : AttendanceMinuteCalculator.minute(record.getTimeIn());
+            LocalDateTime out = record == null || record.getTimeOut() == null ? null : AttendanceMinuteCalculator.minute(record.getTimeOut());
+            BitSet minutes = covered.computeIfAbsent(date, unused -> new BitSet(expected));
+            for (int minute = 0; minute < expected; minute++) {
+                LocalDateTime point = shift.plusMinutes(minute);
+                if (!point.isBefore(from) && point.isBefore(to)
+                        && (in == null || out == null || point.isBefore(in) || !point.isBefore(out))) minutes.set(minute);
+            }
+        }
+        int remaining = (int) Math.round(PayrollCompatibilityDefaults.resolvePermissionHoursAllowed(employee) * 60);
+        Map<LocalDate, Integer> result = new HashMap<>();
+        for (Map.Entry<LocalDate, BitSet> entry : covered.entrySet()) {
+            int credit = Math.min(remaining, entry.getValue().cardinality());
+            result.put(entry.getKey(), credit);
+            remaining -= credit;
+        }
+        return result;
     }
 
     @Transactional(readOnly = true)
@@ -495,9 +695,6 @@ public class PayrollCalculationService {
             }
 
             for (LocalDate date : expandLeaveDates(leave, month, year)) {
-                if (holidayMap.containsKey(date)) {
-                    continue;
-                }
                 if (scheduledMinutesByDate != null) {
                     Integer scheduledMinutes = scheduledMinutesByDate.get(date);
                     if (scheduledMinutes == null || scheduledMinutes <= 0) {
@@ -557,7 +754,7 @@ public class PayrollCalculationService {
             entry.recordedOvertimeMinutes += resolveRecordedOvertimeMinutes(record);
             entry.permissionUsedMinutes += resolvePermissionUsedMinutes(record);
             workEntries.put(date, entry);
-            if (Boolean.TRUE.equals(record.getOvertimeApproved()) && entry.recordedOvertimeMinutes > 0) {
+            if (Boolean.TRUE.equals(record.getOvertimeApproved())) {
                 overtimeApprovedDates.add(date);
             }
         }
@@ -749,11 +946,11 @@ public class PayrollCalculationService {
         if ("CL".equals(normalized) || normalized.contains("CASUAL")) {
             return LeaveCategory.CASUAL;
         }
-        if (normalized.contains("PAID")) {
-            return LeaveCategory.PAID;
-        }
         if (normalized.contains("UNPAID") || normalized.contains("LOP") || normalized.contains("LOSS")) {
             return LeaveCategory.UNPAID;
+        }
+        if (normalized.contains("PAID")) {
+            return LeaveCategory.PAID;
         }
         return LeaveCategory.UNPAID;
     }
@@ -837,6 +1034,10 @@ public class PayrollCalculationService {
 
     private double roundMoney(double value) {
         return Math.round(value * 100.0) / 100.0;
+    }
+
+    private boolean hasValue(Object value) {
+        return value != null && !String.valueOf(value).isBlank();
     }
 
     private int objectInt(Object value) {
@@ -1132,9 +1333,15 @@ public class PayrollCalculationService {
             double basicSalary,
             double perMinuteRate,
             double estimatedNetSalary,
-            int additionalWorkingDays) {
+            int additionalWorkingDays,
+            List<Map<String, Object>> dailyRows,
+            BigDecimal overtimeAmount,
+            BigDecimal proratedBasic,
+            BigDecimal attendanceDeduction,
+            BigDecimal lateAmount,
+            int unpaidMissingMinutes) {
         public static PayrollResult empty() {
-            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0);
         }
     }
 }

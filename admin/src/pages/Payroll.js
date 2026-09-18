@@ -72,6 +72,7 @@ function EmployeePayrollViewer() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [employeeDirectory, setEmployeeDirectory] = useState([]);
   const [netSalary, setNetSalary] = useState(null);
+  const [calculationDetails, setCalculationDetails] = useState(null);
   const [openSnackbar, setOpenSnackbar] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
@@ -87,7 +88,15 @@ function EmployeePayrollViewer() {
   const [logoUploaded, setLogoUploaded] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
   const [payslipPreviewOpen, setPayslipPreviewOpen] = useState(false);
-  const [includeOvertime, setIncludeOvertime] = useState(false);
+  const [includeOvertime, setIncludeOvertime] = useState(true);
+  const [applyLateDeduction, setApplyLateDeduction] = useState(true);
+  const [payrollSearch, setPayrollSearch] = useState("");
+  const [payrollStatusFilter, setPayrollStatusFilter] = useState("");
+
+  useEffect(() => {
+    setNetSalary(null);
+    setCalculationDetails(null);
+  }, [paymentDetails, additionalAllowances, includeOvertime, applyLateDeduction, data]);
 
   const resetPayrollComputation = () => {
     setData(null);
@@ -100,7 +109,8 @@ function EmployeePayrollViewer() {
     setAdditionalAllowances([{ name: "", amount: 0 }]);
     setOpenSnackbar(false);
     setPayslipPreviewOpen(false);
-    setIncludeOvertime(false);
+    setIncludeOvertime(true);
+    setApplyLateDeduction(true);
   };
 
   const normalizeEmployeeIdRef = (value) => {
@@ -323,309 +333,11 @@ function EmployeePayrollViewer() {
     return time ? format(time, "HH:mm:ss") : value || "-";
   };
 
-  const formatWorkingHours = (timeIn, timeOut) => {
-    const start = parseRecordDateTime(timeIn);
-    const end = parseRecordDateTime(timeOut);
-    if (!start || !end) return "-";
-    const diffMinutes = Math.floor((end - start) / 60000);
-    if (diffMinutes < 0) return "-";
-    const hours = Math.floor(diffMinutes / 60);
-    const minutes = diffMinutes % 60;
-    return `${hours}h ${minutes}m`;
-  };
-
-  const buildDateKey = (dateValue) => {
-    const parsed = parseRecordDate(dateValue);
-    return parsed ? format(parsed, "yyyy-MM-dd") : null;
-  };
-
-  const getAdditionalWorkingDayType = (dateValue) => {
-    if (!dateValue) return null;
-    const day = dateValue.getDay();
-    if (day !== 0 && day !== 6) return null;
-
-    const firstOfMonth = new Date(dateValue.getFullYear(), dateValue.getMonth(), 1);
-    let count = 0;
-    for (let d = new Date(firstOfMonth); d <= dateValue; d.setDate(d.getDate() + 1)) {
-      if (d.getDay() === day) count += 1;
-    }
-
-    const isOdd = count % 2 === 1;
-    if (day === 6) return isOdd ? "ODD_SATURDAY" : "EVEN_SATURDAY";
-    return isOdd ? "ODD_SUNDAY" : "EVEN_SUNDAY";
-  };
-
-  const hasAdditionalWorkingDay = (employee, dateValue) => {
-    if (!employee || !dateValue) return false;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return false;
-    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
-    return Array.isArray(list)
-      ? list.some((item) => String(item?.dayType || "").toUpperCase() === type)
-      : false;
-  };
-
-  const getAdditionalWorkingDayEntry = (employee, dateValue) => {
-    if (!employee || !dateValue) return null;
-    const type = getAdditionalWorkingDayType(dateValue);
-    if (!type) return null;
-    const list = employee.additionalWorkingDays || employee.additionalWorkingDay || [];
-    if (!Array.isArray(list)) return null;
-    return list.find((item) => String(item?.dayType || "").toUpperCase() === type) || null;
-  };
-
-  const isWeekendOffPolicy = (employee) => {
-    const policyRaw = String(employee?.leavePolicyType || "").toLowerCase();
-    const weekOffRaw = String(employee?.weekOff || "").toLowerCase();
-    if (policyRaw.includes("weekend")) return true;
-    if (policyRaw.includes("saturday") && policyRaw.includes("sunday")) return true;
-    if (weekOffRaw.includes("saturday") && weekOffRaw.includes("sunday")) return true;
-    return false;
-  };
-
-  const isWeekOffDate = (dateValue, employee) => {
-    if (!dateValue || !employee) return false;
-    const dayName = format(dateValue, "EEEE").toLowerCase();
-
-    if (isWeekendOffPolicy(employee)) {
-      if (hasAdditionalWorkingDay(employee, dateValue)) return false;
-      return dayName === "saturday" || dayName === "sunday";
-    }
-
-    const weekOffDay = String(employee.weekOff || "").toLowerCase().trim();
-    if (!weekOffDay) return false;
-    return dayName === weekOffDay;
-  };
-
-  const getDerivedAttendanceStatus = (record) => {
-    if (!record) return "-";
-    const rawStatus = String(record.attendanceStatus || "").trim();
-    const statusLower = rawStatus.toLowerCase();
-    const dayStatus = String(record.dayStatus || "").toLowerCase();
-    const recordDate = parseRecordDate(record.date);
-    const dateKey = recordDate ? format(recordDate, "yyyy-MM-dd") : null;
-    const hasPunch = Boolean(record?.timeIn || record?.timeOut);
-
-    if (dateKey && holidayDateSet.has(dateKey)) return "Holiday";
-    if (recordDate && isWeekOffDate(recordDate, record.employee)) {
-      return hasPunch ? "Present" : "Week Off";
-    }
-
-    const isWeekend = recordDate ? recordDate.getDay() === 0 || recordDate.getDay() === 6 : false;
-    const isScheduledWeekendWork = isWeekend && recordDate
-      ? hasAdditionalWorkingDay(record.employee, recordDate)
-      : false;
-    if (
-      isScheduledWeekendWork &&
-      !hasPunch &&
-      (statusLower.includes("leave") || (dayStatus.includes("leave") && !statusLower))
-    ) {
-      return "Absent";
-    }
-
-    if (statusLower.includes("leave")) return "Leave";
-    if (dayStatus.includes("leave") && !statusLower) return "Leave";
-    return rawStatus || "-";
-  };
-
-  const normalizeAttendanceStatus = (status) => {
-    const normalized = String(status || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
-    if (!normalized) return "";
-    if (normalized.includes("present")) return "Present";
-    if (normalized.includes("absent")) return "Absent";
-    if (normalized.includes("weekoff") || normalized.includes("weekendoff")) return "Week Off";
-    if (normalized.includes("holiday")) return "Holiday";
-    return "";
-  };
-
-  const getAttendanceStatusBucket = (record) =>
-    normalizeAttendanceStatus(getDerivedAttendanceStatus(record));
-
-  const attendanceSummary = {
-    total: attendanceRecords.length,
-    present: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Present").length,
-    absent: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Absent").length,
-    weekOff: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Week Off").length,
-    holiday: attendanceRecords.filter((record) => getAttendanceStatusBucket(record) === "Holiday").length,
-  };
-
-  const parseTimeToMinutes = (value) => {
-    const parsed = parseRecordDateTime(value);
-    if (!parsed) return null;
-    return parsed.getHours() * 60 + parsed.getMinutes();
-  };
-
-  const getShiftStartForRecord = (record) => {
-    const employee = record?.employee;
-    if (!employee) return null;
-    const recordDate = parseRecordDate(record?.date);
-    const additionalEntry = recordDate
-      ? getAdditionalWorkingDayEntry(employee, recordDate)
-      : null;
-    if (additionalEntry?.timeIn) return additionalEntry.timeIn;
-    return employee.shiftStartTime || data?.shiftStartTime || null;
-  };
-
-  const getLateArrivalMinutes = (record) => {
-    if (record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes))) {
-      return Math.max(0, Number(record.lateMinutes));
-    }
-    if (!record?.timeIn) return 0;
-    const expectedMinutes = parseTimeToMinutes(getShiftStartForRecord(record));
-    const clockInMinutes = parseTimeToMinutes(record.timeIn);
-    if (expectedMinutes == null || clockInMinutes == null) return 0;
-    const lateMinutes = clockInMinutes - expectedMinutes;
-    return lateMinutes > 0 ? lateMinutes : 0;
-  };
-
-  const getComputedMissedMinutes = (record) => {
-    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
-    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
-    if (hasLateMinutes || hasEarlyOutMinutes) {
-      return Math.max(
-        0,
-        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
-          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
-      );
-    }
-    if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
-      return Math.max(0, Number(record.calculatedMissedMinutes));
-    }
-    return Math.max(0, Number(record?.missedTimes || 0));
-  };
-
-  const normalizeAttendancePayload = (payload) => {
-    if (Array.isArray(payload)) return payload;
-    if (payload?.records && Array.isArray(payload.records)) return payload.records;
-    if (payload?.data && Array.isArray(payload.data)) return payload.data;
-    if (payload?.items && Array.isArray(payload.items)) return payload.items;
-    return payload ? [payload] : [];
-  };
-
-  const getSelectedEmployeeDetails = (employeeRef = normalizeEmployeeIdRef(employeeId)) => {
-    const raw = String(employeeRef || "").trim();
-    if (!raw) return null;
-    const lowered = raw.toLowerCase();
-    const fromDirectory =
-      employeeDirectoryIndex.byId.get(raw) ||
-      employeeDirectoryIndex.byEmployeeId.get(raw) ||
-      employeeDirectoryIndex.byCode.get(lowered);
-
-    if (fromDirectory) return fromDirectory;
-    if (!data) return null;
-
-    const dataCandidates = [data.id, data.employeeId, data.employeeCode, data.code]
-      .filter((value) => value != null)
-      .map((value) => String(value).toLowerCase());
-    return dataCandidates.includes(lowered) ? data : null;
-  };
-
-  const enrichAttendanceRecordsWithEmployeeDetails = (items, employeeRef) => {
-    const selectedEmployee = getSelectedEmployeeDetails(employeeRef);
-    return (items || []).map((record) => {
-      const baseEmployee = record?.employee || {};
-      const idCandidates = [
-        record?.employee?.id,
-        record?.employeeId,
-        record?.employee?.employeeId,
-      ]
-        .filter((value) => value != null)
-        .map((value) => String(value));
-      const codeCandidates = [
-        record?.employee?.employeeCode,
-        record?.employee?.code,
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
-
-      let matched = null;
-      for (const idValue of idCandidates) {
-        matched =
-          employeeDirectoryIndex.byId.get(idValue) ||
-          employeeDirectoryIndex.byEmployeeId.get(idValue);
-        if (matched) break;
-      }
-      if (!matched) {
-        for (const codeValue of codeCandidates) {
-          matched = employeeDirectoryIndex.byCode.get(codeValue);
-          if (matched) break;
-        }
-      }
-
-      return {
-        ...record,
-        employee: matched || selectedEmployee
-          ? { ...baseEmployee, ...(matched || selectedEmployee) }
-          : baseEmployee,
-      };
-    });
-  };
-
-  const sortAttendanceRecords = (items) => {
-    return [...items].sort((left, right) => {
-      const leftDate = parseRecordDate(left?.date);
-      const rightDate = parseRecordDate(right?.date);
-      if (!leftDate && !rightDate) return 0;
-      if (!leftDate) return 1;
-      if (!rightDate) return -1;
-      if (rightDate.getTime() !== leftDate.getTime()) return rightDate - leftDate;
-
-      const leftTime = parseRecordDateTime(left?.timeIn);
-      const rightTime = parseRecordDateTime(right?.timeIn);
-      if (!leftTime && !rightTime) return 0;
-      if (!leftTime) return 1;
-      if (!rightTime) return -1;
-      return rightTime - leftTime;
-    });
-  };
-
-  const appendMissingAttendanceRows = (items, employeeRef, month, year) => {
-    const employee = getSelectedEmployeeDetails(employeeRef);
-    if (!employee) return items;
-
-    const existingByDateKey = new Set(
-      items
-        .map((record) => buildDateKey(record?.date))
-        .filter(Boolean)
-    );
-
-    const syntheticRows = [];
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0);
-    for (
-      let currentDate = new Date(startDate);
-      currentDate <= endDate;
-      currentDate.setDate(currentDate.getDate() + 1)
-    ) {
-      const dateKey = format(currentDate, "yyyy-MM-dd");
-      if (existingByDateKey.has(dateKey)) continue;
-      syntheticRows.push({
-        id: `virtual-${employee?.id || "emp"}-${dateKey}`,
-        date: format(currentDate, "dd/MM/yyyy"),
-        attendanceStatus: "Absent",
-        dayStatus: "",
-        timeIn: null,
-        timeOut: null,
-        missedTimes: 0,
-        location: null,
-        employee,
-        __synthetic: true,
-      });
-    }
-
-    return sortAttendanceRecords([...items, ...syntheticRows]);
-  };
-
-  const filterAttendanceRecordsByMonth = (items, month, year) => {
-    return (items || []).filter((record) => {
-      const recordDate = parseRecordDate(record?.date);
-      if (!recordDate) return false;
-      return recordDate.getMonth() + 1 === month && recordDate.getFullYear() === year;
-    });
-  };
+  const getDerivedAttendanceStatus = (record) => record?.displayStatus || record?.countStatus || "-";
+  const getAttendanceStatusBucket = (record) => record?.countStatus || "";
+  const attendanceSummary = data?.attendanceSummary || {};
+  const getLateArrivalMinutes = (record) => record?.lateMinutes ?? 0;
+  const getComputedMissedMinutes = (record) => record?.calculatedMissedMinutes ?? null;
 
   const getHolidayCounts = (payload) => {
     const full = Number(payload?.holidayDaysFull || 0);
@@ -680,37 +392,27 @@ function EmployeePayrollViewer() {
   const actualAttendance = data?.actualAttendance || {};
   const salaryCalculation = data?.salaryCalculation || {};
   const backendEstimatedSalary = parseNumber(
-    salaryCalculation.estimatedNetSalary ?? data?.netSalary ?? data?.salary
+    salaryCalculation.earnedSalary ?? salaryCalculation.estimatedNetSalary ?? data?.proratedBasic ?? data?.salary
   );
   const perMinuteSalary = parseNumber(
     salaryCalculation.perMinuteRate ?? data?.perMinuteSalary ?? 0
   );
 
-  const additionalAllowancesTotal = additionalAllowances.reduce((sum, item) => {
-    return sum + parseNumber(item?.amount);
-  }, 0);
-  const overtimeMinutes = Math.max(
-    0,
-    Math.round(parseNumber(data?.overtimeMinutes ?? parseNumber(data?.overtimeHours) * 60))
-  );
-  const overtimeSalary = roundCurrency(overtimeMinutes * parseNumber(data?.perMinuteSalary));
+  const additionalAllowancesTotal = calculationDetails?.additionalAllowancesTotal ?? 0;
+  const overtimeMinutes = data?.overtimeMinutes ?? 0;
+  const overtimeSalary = data?.overtimeAmount ?? 0;
   const includedOvertimeSalary = includeOvertime ? overtimeSalary : 0;
-  const payrollBaseSalary = backendEstimatedSalary;
   const pfBaseSalary = parseNumber(data?.salary);
-  const lopDays = parseNumber(paymentDetails.lop);
-  const perDaySalary =
-    parseNumber(data?.perDaySalary) > 0
-      ? parseNumber(data?.perDaySalary)
-      : parseNumber(data?.scheduledDays) > 0
-      ? pfBaseSalary / parseNumber(data?.scheduledDays)
-      : 0;
-  const lopDeductionAmount = roundCurrency(lopDays * perDaySalary);
-  const resolvedPfAmount =
-    parseNumber(paymentDetails.pfAmount) > 0
-      ? parseNumber(paymentDetails.pfAmount)
-      : parseNumber(paymentDetails.pfPercentage) > 0
-      ? (pfBaseSalary * parseNumber(paymentDetails.pfPercentage)) / 100
-      : 0;
+  const lopDays = data?.absentPayableDays ?? 0;
+  const unpaidMissingMinutes = parseNumber(
+    paymentDetails.lop !== "" && paymentDetails.lop !== null && paymentDetails.lop !== undefined
+      ? paymentDetails.lop
+      : salaryCalculation.unpaidMissingMinutes ?? data?.unpaidMissingMinutes ?? 0
+  );
+  const lateAmount = parseNumber(salaryCalculation.lateAmount ?? data?.lateAmount ?? 0);
+  const includedLateAmount = applyLateDeduction ? lateAmount : 0;
+  const lopDeductionAmount = roundCurrency(unpaidMissingMinutes * perMinuteSalary);
+  const resolvedPfAmount = calculationDetails?.pfAmount ?? 0;
 
   const casualLeaveTakenCount =
     parseNumber(data?.paidCasualDays) + parseNumber(data?.unpaidCasualDays);
@@ -730,7 +432,7 @@ function EmployeePayrollViewer() {
   );
 
   const previewEarnings = [
-    { label: "Estimated Net Salary", amount: backendEstimatedSalary },
+    { label: "Base / Earned Salary", amount: backendEstimatedSalary },
     { label: "Convenience", amount: parseNumber(paymentDetails.convenience) },
     { label: "OT", amount: includedOvertimeSalary },
     { label: "Incentives", amount: parseNumber(paymentDetails.incentives) },
@@ -738,8 +440,9 @@ function EmployeePayrollViewer() {
   ].filter((item) => item.amount > 0);
 
   const previewDeductions = [
+    { label: "Late Amount", amount: includedLateAmount },
+    { label: "Unpaid Missing Minutes", amount: lopDeductionAmount },
     ...(SHOW_PF_SECTION ? [{ label: "PF", amount: resolvedPfAmount }] : []),
-    { label: "LOP", amount: lopDeductionAmount },
     { label: "Advance", amount: parseNumber(paymentDetails.advance) },
     { label: "Others", amount: parseNumber(paymentDetails.others) },
   ].filter((item) => item.amount > 0);
@@ -747,6 +450,133 @@ function EmployeePayrollViewer() {
   const finalNetSalary = parseNumber(
     netSalary !== null && netSalary !== undefined ? netSalary : backendEstimatedSalary
   );
+  const employeeDisplayName = data
+    ? `${data.firstName || ""} ${data.lastName || ""}`.trim() || data.name || "Employee"
+    : "";
+  const monthLabel = format(selectedDate || new Date(), "MMMM yyyy");
+  const remainingCl = Math.max(
+    0,
+    parseNumber(data?.casualLeaveBalance ?? data?.expectedAttendance?.clEntitlement ?? 0) -
+      parseNumber(data?.paidCasualDays ?? 0)
+  );
+  const currentEarnedSalary = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount ?? 0),
+    0
+  );
+  const dashboardPerDaySalary = parseNumber(
+    attendanceRecords.find((row) => parseNumber(row?.perDaySalaryAmount ?? row?.perDaySalary) > 0)?.perDaySalaryAmount ??
+      attendanceRecords.find((row) => parseNumber(row?.perDaySalaryAmount ?? row?.perDaySalary) > 0)?.perDaySalary ??
+      data?.perDaySalary ??
+      0
+  );
+  const paidDays = attendanceRecords.filter((row) => parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount ?? 0) > 0).length;
+  const lopDayCount = attendanceRecords.filter((row) => {
+    const status = String(row?.displayStatus || row?.countStatus || "").toLowerCase();
+    return status.includes("absent") || status.includes("lop") || parseNumber(row?.unpaidMissingMinutes) > 0;
+  }).length;
+  const totalLateDeduction = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.lateDeductionAmount ?? row?.lateDeduction ?? 0),
+    0
+  );
+  const totalOvertimeAmount = attendanceRecords.reduce(
+    (sum, row) => sum + parseNumber(row?.overtimeAmount ?? 0),
+    0
+  );
+  const monthToDateSummary = attendanceRecords.reduce(
+    (summary, row) => {
+      const status = String(row?.displayStatus || row?.countStatus || "").toLowerCase();
+      summary.total += 1;
+      if (status.includes("present")) summary.present += 1;
+      else if (status.includes("week off")) summary.weekOff += 1;
+      else if (status.includes("holiday")) summary.holiday += 1;
+      else if (status.includes("pending")) summary.pending += 1;
+      else if (status.includes("leave") || status.includes("cl")) summary.clApproved += parseNumber(row?.dailyEarnedSalary ?? row?.dayEarnedAmount) > 0 ? 1 : 0;
+      else if (status.includes("absent") || status.includes("lop")) summary.lop += 1;
+      return summary;
+    },
+    { total: 0, present: 0, weekOff: 0, holiday: 0, clApproved: 0, pending: 0, lop: 0 }
+  );
+  const payrollStatusOptions = ["Present", "Week Off", "Holiday", "CL Approved", "CL Pending", "CL Rejected", "Absent", "LOP", "Late", "Overtime"];
+  const statusBadgeSx = (status) => {
+    const normalized = String(status || "").toLowerCase();
+    if (normalized.includes("present")) return { bgcolor: "#dcfce7", color: "#166534" };
+    if (normalized.includes("week off")) return { bgcolor: "#dbeafe", color: "#1d4ed8" };
+    if (normalized.includes("holiday")) return { bgcolor: "#fef3c7", color: "#92400e" };
+    if (normalized.includes("pending")) return { bgcolor: "#ffedd5", color: "#c2410c" };
+    if (normalized.includes("leave") || normalized.includes("cl")) return { bgcolor: "#ede9fe", color: "#6d28d9" };
+    if (normalized.includes("absent") || normalized.includes("lop") || normalized.includes("reject")) return { bgcolor: "#fee2e2", color: "#b91c1c" };
+    return { bgcolor: "#e5e7eb", color: "#374151" };
+  };
+  const filteredPayrollRows = attendanceRecords.filter((row) => {
+    const status = String(row?.displayStatus || row?.countStatus || "");
+    const remark = String(row?.payrollRemark || "");
+    const search = payrollSearch.trim().toLowerCase();
+    const matchesSearch =
+      !search ||
+      String(row?.date || "").toLowerCase().includes(search) ||
+      status.toLowerCase().includes(search) ||
+      employeeDisplayName.toLowerCase().includes(search) ||
+      remark.toLowerCase().includes(search);
+    const matchesFilter =
+      !payrollStatusFilter ||
+      status.toLowerCase().includes(payrollStatusFilter.toLowerCase()) ||
+      (payrollStatusFilter === "Late" && parseNumber(row?.lateMinutes) > 0) ||
+      (payrollStatusFilter === "Overtime" && parseNumber(row?.approvedOvertimeMinutes) > 0) ||
+      (payrollStatusFilter === "LOP" && parseNumber(row?.unpaidMissingMinutes) > 0);
+    return matchesSearch && matchesFilter;
+  });
+
+  const refreshPayroll = () => handleSubmit({ preventDefault: () => {} });
+  const moveMonth = (amount) => {
+    const next = new Date(selectedDate || new Date());
+    next.setMonth(next.getMonth() + amount);
+    setSelectedDate(next);
+    resetPayrollComputation();
+  };
+  const exportPayrollCsv = () => {
+    if (!data || filteredPayrollRows.length === 0) return;
+    const headers = [
+      "Employee",
+      "Month",
+      "Date",
+      "Day",
+      "Status",
+      "Time In",
+      "Time Out",
+      "Late Min",
+      "Late Deduction",
+      "OT Min",
+      "OT Amount",
+      "Per Day Salary",
+      "Daily Earned Salary",
+      "Remarks",
+    ];
+    const rows = filteredPayrollRows.map((row) => [
+      employeeDisplayName,
+      monthLabel,
+      formatAttendanceDate(row.date),
+      formatDayName(row.date),
+      row.displayStatus || row.countStatus || "-",
+      formatTimeValue(row.timeIn),
+      formatTimeValue(row.timeOut),
+      row.lateMinutes ?? 0,
+      parseNumber(row.lateDeductionAmount ?? row.lateDeduction ?? 0),
+      row.approvedOvertimeMinutes ?? 0,
+      parseNumber(row.overtimeAmount ?? 0),
+      parseNumber(row.perDaySalaryAmount ?? row.perDaySalary ?? 0),
+      parseNumber(row.dailyEarnedSalary ?? row.dayEarnedAmount ?? 0),
+      row.payrollRemark || "-",
+    ]);
+    const csv = [headers, ...rows]
+      .map((line) => line.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `payroll-${employeeId || data.employeeId}-${format(selectedDate, "yyyy-MM")}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const handlePrint = () => {
     if (!data) return;
@@ -1231,6 +1061,13 @@ function EmployeePayrollViewer() {
       }
 
       const result = await response.json();
+      if (Array.isArray(result?.dailyRows)) {
+        setAttendanceRecords(result.dailyRows);
+      }
+      const defaultMissingMinutes = parseNumber(
+        result?.salaryCalculation?.unpaidMissingMinutes ?? result?.unpaidMissingMinutes ?? result?.absentMinutes ?? 0
+      );
+      setPaymentDetails((prev) => ({ ...prev, lop: defaultMissingMinutes }));
       const payrollDays = Array.isArray(result?.additionalWorkingDays)
         ? result.additionalWorkingDays
         : [];
@@ -1316,22 +1153,7 @@ function EmployeePayrollViewer() {
 
     setAttendanceLoading(true);
     try {
-      const primaryUrl =
-        `${API_BASE_URL}/api/attendance-records/by-employee-month?employeeId=${encodeURIComponent(
-          employeeRef
-        )}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}`;
-      const fallbackUrl =
-        `${API_BASE_URL}/api/attendance-records/by-employee?employeeId=${encodeURIComponent(
-          employeeRef
-        )}&limit=200&clientId=${encodeURIComponent(clientId)}`;
-
-      let response = await fetch(primaryUrl);
-      if (!response.ok && response.status !== 400 && response.status !== 404) {
-        const fallbackResponse = await fetch(fallbackUrl);
-        if (fallbackResponse.ok || fallbackResponse.status === 400 || fallbackResponse.status === 404) {
-          response = fallbackResponse;
-        }
-      }
+      const response = await fetch(`${API_BASE_URL}/api/payroll/month-payroll?employeeId=${encodeURIComponent(employeeRef)}&month=${month}&year=${year}&clientId=${encodeURIComponent(clientId)}`);
 
       if (response.status === 400 || response.status === 404) {
         setAttendanceRecords([]);
@@ -1343,16 +1165,8 @@ function EmployeePayrollViewer() {
         throw new Error(message);
       }
       const result = await response.json();
-      const normalizedRecords = normalizeAttendancePayload(result).filter((item) => item != null);
-      const monthRecords = filterAttendanceRecordsByMonth(normalizedRecords, month, year);
-      const enrichedRecords = enrichAttendanceRecordsWithEmployeeDetails(monthRecords, employeeRef);
-      const recordsWithMissingDays = appendMissingAttendanceRows(
-        enrichedRecords,
-        employeeRef,
-        month,
-        year
-      );
-      setAttendanceRecords(sortAttendanceRecords(recordsWithMissingDays));
+      if (!Array.isArray(result.dailyRows)) throw new Error("Backend payroll ledger is unavailable");
+      setAttendanceRecords(result.dailyRows);
     } catch (err) {
       setAttendanceError(err.message || "Failed to fetch attendance records");
     } finally {
@@ -1403,29 +1217,32 @@ function EmployeePayrollViewer() {
           },
           body: new URLSearchParams({
             employeeId: employeeRef,
+            month: getMonth(selectedDate) + 1,
+            year: getYear(selectedDate),
+            includeOvertime,
+            applyLateDeduction,
+            preview: true,
             position: data.position || "",
             branch: data.branch || "",
-            salary: payrollBaseSalary || 0,
             convienceAmount: paymentDetails.convenience || 0,
             incentive: paymentDetails.incentives || 0,
-            overTime: includedOvertimeSalary || 0,
-            lossOfPay: lopDeductionAmount || 0,
+            lossOfPay: paymentDetails.lop || 0,
             advance: paymentDetails.advance || 0,
             others: paymentDetails.others || 0,
-            pfAmount: resolvedPfAmount || 0,
+            pfAmount: paymentDetails.pfAmount || 0,
             pfPercentage: paymentDetails.pfPercentage || 0,
             additionalAllowancesJson: JSON.stringify(additionalAllowances),
-            additionalAllowancesTotal: additionalAllowancesTotal || 0,
           }),
         }
       );
 
       if (!response.ok) {
-        throw new Error("Failed to calculate salary");
+        throw new Error(await parseErrorMessage(response, "Failed to calculate salary"));
       }
 
       const result = await response.json();
       setNetSalary(result.netSalary);
+      setCalculationDetails(result);
       setOpenSnackbar(true);
     } catch (err) {
       setError(err.message || "Failed to calculate salary");
@@ -1544,17 +1361,17 @@ function EmployeePayrollViewer() {
     page: {
       minHeight: "100vh",
       background:
-        "radial-gradient(900px 620px at 8% 10%, rgba(123,74,184,0.14), transparent 60%), radial-gradient(880px 620px at 90% 0%, rgba(170,130,225,0.16), transparent 65%), linear-gradient(180deg, #f7f3fc 0%, #f1ebf9 42%, #ede6f6 100%)",
-      color: "#2a1e3f",
+        "linear-gradient(180deg, #f7fbff 0%, #eef6ff 44%, #f8fafc 100%)",
+      color: "#0f172a",
       pb: 6,
     },
     hero: {
       background:
-        "linear-gradient(135deg, #351153 0%, #4f2677 48%, #65388f 100%)",
+        "linear-gradient(135deg, #0f5ea8 0%, #1677c8 52%, #38bdf8 100%)",
       color: "#ffffff",
-      borderRadius: 4,
+      borderRadius: 3,
       padding: { xs: "24px", md: "32px" },
-      boxShadow: "0 18px 42px rgba(53,17,83,0.28)",
+      boxShadow: "0 18px 42px rgba(15,94,168,0.22)",
       position: "relative",
       overflow: "hidden",
       border: "1px solid rgba(255,255,255,0.22)",
@@ -1563,7 +1380,7 @@ function EmployeePayrollViewer() {
       position: "absolute",
       inset: 0,
       background:
-        "radial-gradient(420px 240px at 20% 20%, rgba(255,255,255,0.24), transparent 60%), radial-gradient(420px 240px at 85% 10%, rgba(214,186,255,0.22), transparent 60%)",
+        "radial-gradient(420px 240px at 20% 20%, rgba(255,255,255,0.24), transparent 60%)",
       pointerEvents: "none",
     },
     heroTitle: {
@@ -1596,35 +1413,35 @@ function EmployeePayrollViewer() {
     panel: {
       backgroundColor: "#ffffff",
       borderRadius: 3,
-      border: "1px solid rgba(53,17,83,0.1)",
-      boxShadow: "0 12px 30px rgba(53,17,83,0.12)",
+      border: "1px solid rgba(15,94,168,0.12)",
+      boxShadow: "0 12px 30px rgba(15,23,42,0.08)",
     },
     sectionTitle: {
       fontFamily: '"Manrope", sans-serif',
       fontWeight: 700,
-      color: "#351153",
+      color: "#0f5ea8",
       marginBottom: "12px",
       letterSpacing: "0.5px",
       fontSize: "0.9rem",
       textTransform: "uppercase",
     },
     primaryButton: {
-      background: "linear-gradient(135deg, #351153 0%, #5a2d8a 100%)",
+      background: "linear-gradient(135deg, #0f5ea8 0%, #1677c8 100%)",
       color: "#ffffff",
       "&:hover": {
-        background: "linear-gradient(135deg, #2d0f47 0%, #4c2575 100%)",
+        background: "linear-gradient(135deg, #0b4a86 0%, #115fa1 100%)",
       },
       textTransform: "none",
       fontWeight: 700,
-      boxShadow: "0 12px 26px rgba(53,17,83,0.3)",
+      boxShadow: "0 12px 26px rgba(15,94,168,0.24)",
     },
     secondaryButton: {
       backgroundColor: "#ffffff",
-      color: "#351153",
-      border: "1px solid rgba(53,17,83,0.3)",
+      color: "#0f5ea8",
+      border: "1px solid rgba(15,94,168,0.3)",
       "&:hover": {
-        backgroundColor: "#f3ecfb",
-        border: "1px solid rgba(53,17,83,0.55)",
+        backgroundColor: "#eef6ff",
+        border: "1px solid rgba(15,94,168,0.55)",
       },
       textTransform: "none",
       fontWeight: 600,
@@ -1648,41 +1465,41 @@ function EmployeePayrollViewer() {
         backgroundColor: "#ffffff",
         borderRadius: 2,
         "& fieldset": {
-          borderColor: "rgba(53,17,83,0.2)",
+          borderColor: "rgba(15,94,168,0.18)",
         },
         "&:hover fieldset": {
-          borderColor: "rgba(53,17,83,0.45)",
+          borderColor: "rgba(15,94,168,0.42)",
         },
         "&.Mui-focused fieldset": {
-          borderColor: "#351153",
+          borderColor: "#0f5ea8",
         },
       },
       "& .MuiInputBase-input": {
-        color: "#2a1e3f",
+        color: "#0f172a",
       },
       "& label": {
-        color: "rgba(53,17,83,0.75)",
+        color: "rgba(15,23,42,0.65)",
       },
     },
     statCard: {
       padding: "18px 20px",
       borderRadius: 2.5,
       background:
-        "linear-gradient(140deg, #ffffff 0%, #f8f4ff 100%)",
-      border: "1px solid rgba(53,17,83,0.12)",
-      boxShadow: "0 10px 24px rgba(53,17,83,0.11)",
+        "linear-gradient(140deg, #ffffff 0%, #f8fbff 100%)",
+      border: "1px solid rgba(15,94,168,0.12)",
+      boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
     },
     statLabel: {
       fontSize: "0.8rem",
       textTransform: "uppercase",
       letterSpacing: "0.6px",
-      color: "rgba(53,17,83,0.72)",
+      color: "rgba(15,23,42,0.62)",
       fontWeight: 700,
     },
     statValue: {
       fontSize: "1.35rem",
       fontWeight: 700,
-      color: "#351153",
+      color: "#0f5ea8",
       marginTop: "6px",
     },
     salaryDetailsWrapper: {
@@ -1724,7 +1541,7 @@ function EmployeePayrollViewer() {
       color: "#351153",
     },
     tableHeaderRow: {
-      backgroundColor: "#f4eefe",
+      backgroundColor: "#eaf4ff",
     },
     darkTable: {
       "& td, & th": {
@@ -1761,20 +1578,49 @@ function EmployeePayrollViewer() {
         <Container maxWidth="xl" sx={{ pt: 4, px: { xs: 2, md: 4 } }}>
           <Box sx={styles.hero}>
             <Box sx={styles.heroGlow} />
-            <Box sx={{ position: "relative" }}>
-              <Typography sx={styles.heroTitle}>Payroll Dashboard</Typography>
-              <Typography sx={styles.heroSub}>
-                Manage payroll, attendance, and salary insights for each employee.
-              </Typography>
-              <Box sx={styles.actionRow}>
-                <Box sx={styles.chip}>
-                  {format(selectedDate, "MMMM yyyy")}
-                </Box>
-                {data && (
-                  <Box sx={styles.chip}>
-                    Employee #{employeeId || data.employeeId}
-                  </Box>
-                )}
+            <Box sx={{ position: "relative", display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 3, justifyContent: "space-between" }}>
+              <Box>
+                <Typography sx={styles.heroTitle}>Payroll Dashboard</Typography>
+                <Typography sx={styles.heroSub}>
+                  Daily payroll details and salary calculation
+                </Typography>
+              </Box>
+              <Box sx={{ display: "flex", gap: 1.2, alignItems: "center", flexWrap: "wrap", justifyContent: { xs: "flex-start", md: "flex-end" } }}>
+                <DatePicker
+                  views={["year", "month"]}
+                  value={selectedDate}
+                  onChange={(newValue) => {
+                    setSelectedDate(newValue);
+                    resetPayrollComputation();
+                  }}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      size="small"
+                      sx={{
+                        width: 180,
+                        "& .MuiOutlinedInput-root": {
+                          bgcolor: "rgba(255,255,255,0.18)",
+                          color: "#fff",
+                          borderRadius: 2,
+                          "& fieldset": { borderColor: "rgba(255,255,255,0.45)" },
+                          "&:hover fieldset": { borderColor: "rgba(255,255,255,0.75)" },
+                        },
+                        "& .MuiInputBase-input": { color: "#fff", fontWeight: 700 },
+                        "& .MuiSvgIcon-root": { color: "#fff" },
+                      }}
+                    />
+                  )}
+                />
+                <Button variant="outlined" onClick={() => moveMonth(-1)} sx={{ color: "#fff", borderColor: "rgba(255,255,255,0.55)", textTransform: "none" }}>
+                  Previous Month
+                </Button>
+                <Button variant="outlined" onClick={() => moveMonth(1)} sx={{ color: "#fff", borderColor: "rgba(255,255,255,0.55)", textTransform: "none" }}>
+                  Next Month
+                </Button>
+                <Button variant="contained" onClick={refreshPayroll} disabled={loading || !employeeId} sx={{ bgcolor: "#ffffff", color: "#0f5ea8", fontWeight: 800, textTransform: "none", "&:hover": { bgcolor: "#eaf4ff" } }}>
+                  Generate / Refresh
+                </Button>
                 {data && (
                   <Tooltip title="Print Payroll Summary">
                     <IconButton onClick={handlePrint} sx={{ color: "#ffffff" }}>
@@ -1977,421 +1823,108 @@ function EmployeePayrollViewer() {
             {/* Data Display Section */}
             {data && (
               <Box>
-                <Grid container spacing={3} sx={{ mb: 3 }}>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Paper sx={styles.statCard}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
-                          <AttachMoneyIcon sx={{ color: "#351153" }} />
-                        </Box>
-                        <Box>
-                          <Typography sx={styles.statLabel}>Net Salary</Typography>
-                          <Typography sx={styles.statValue}>
-                            {formatINR(finalNetSalary)}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-                  </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Paper sx={styles.statCard}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
-                          <AccessTimeIcon sx={{ color: "#351153" }} />
-                        </Box>
-                        <Box>
-                          <Typography sx={styles.statLabel}>Present Payable</Typography>
-                          <Typography sx={styles.statValue}>
-                            {formatHoursAndMinutes(data.payableHours)} ({data.payablePresentMinutes ?? 0} mins)
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-                  </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Paper sx={styles.statCard}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
-                          <AccessTimeIcon sx={{ color: "#351153" }} />
-                        </Box>
-                        <Box>
-                          <Typography sx={styles.statLabel}>Overtime</Typography>
-                          <Typography sx={styles.statValue}>
-                            {formatHoursAndMinutes(data.overtimeHours)}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-                  </Grid>
-                  <Grid item xs={12} sm={6} md={3}>
-                    <Paper sx={styles.statCard}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <Box sx={{ width: 36, height: 36, borderRadius: "50%", background: "#ece1fb", display: "grid", placeItems: "center" }}>
-                          <AccessTimeIcon sx={{ color: "#351153" }} />
-                        </Box>
-                        <Box>
-                          <Typography sx={styles.statLabel}>Monthly Expected Work</Typography>
-                          <Typography sx={styles.statValue}>
-                            {data.expectedHours ?? 0} hrs ({data.expectedWorkingMinutes ?? 0} mins)
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-                  </Grid>
-                </Grid>
-
-                <Grid container spacing={4}>
-                  <Grid item xs={12} md={5}>
-                    <Typography variant="subtitle1" sx={styles.sectionTitle}>
-                      Employee Details
-                    </Typography>
-                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
-                      <Box sx={{ display: "flex", gap: 2, alignItems: "center" }}>
+                <Paper sx={{ ...styles.panel, p: { xs: 2.5, md: 3 }, mb: 3 }}>
+                  <Grid container spacing={3} alignItems="center">
+                    <Grid item xs={12} md={4}>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
                         <Avatar
                           src={resolveProfileImageUrl(data.profileImage)}
-                          sx={{ width: 64, height: 64, bgcolor: "#ece1fb", color: "#351153" }}
+                          sx={{ width: 72, height: 72, bgcolor: "#dbeafe", color: "#0f5ea8", fontWeight: 800 }}
                         >
-                          {data.firstName?.[0] || "E"}
+                          {employeeDisplayName?.[0] || "E"}
                         </Avatar>
                         <Box>
-                          <Typography sx={{ fontWeight: 700, fontSize: "1.1rem" }}>
-                            {data.firstName} {data.lastName}
+                          <Typography sx={{ fontSize: "1.25rem", fontWeight: 800, color: "#0f172a" }}>
+                            {employeeDisplayName}
                           </Typography>
-                          <Typography sx={{ color: "#6b5a7a" }}>
-                            Employee #{employeeId}
+                          <Typography sx={{ color: "#64748b", fontWeight: 600 }}>
+                            EMP {employeeId || data.employeeId} | {data.position || "Designation not set"} | {data.branch || "Department not set"}
                           </Typography>
+                          <Chip size="small" label={data.status || "Active"} sx={{ mt: 1, bgcolor: "#dcfce7", color: "#166534", fontWeight: 700 }} />
                         </Box>
                       </Box>
-                      <Box sx={{ mt: 2, display: "grid", gap: 1 }}>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <PhoneIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
-                          <Typography sx={{ color: "#4a3b61" }}>{data.mobile || "N/A"}</Typography>
-                        </Box>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <BusinessIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
-                          <Typography sx={{ color: "#4a3b61" }}>{data.branch || "N/A"}</Typography>
-                        </Box>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <WorkIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
-                          <Typography sx={{ color: "#4a3b61" }}>{data.position || "N/A"}</Typography>
-                        </Box>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <EmailIcon sx={{ fontSize: 16, color: "#6b5a7a" }} />
-                          <Typography sx={{ color: "#4a3b61" }}>{data.email || "N/A"}</Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-
-                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
-                        <Typography sx={{ fontWeight: 700 }}>Expected Attendance</Typography>
-                        <Typography sx={{ color: "#6b5a7a" }}>{format(selectedDate, "MMMM yyyy")}</Typography>
-                      </Box>
-                      <Box sx={{ display: "grid", gap: 1.15 }}>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Total Calendar Days</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {expectedAttendance.totalCalendarDays ?? data.daysInMonth ?? 0}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Configured Week Offs</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {(expectedAttendance.configuredWeekOffs ?? data.weekOffDays ?? 0)} ({formatWeekOffDay(data.weekOffDay)})
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Public Holidays</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {expectedAttendance.publicHolidays ?? (formatHolidaySummary(data)?.replace("Holidays - ", "") || "0")}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>CL Entitlement</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {expectedAttendance.clEntitlement ?? data.casualLeaveBalance ?? 0}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Scheduled Working Days</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {expectedAttendance.scheduledWorkingDays ?? data.scheduledDays ?? 0}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Permission Allowed</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {permissionAllowancePerMonth} ({formatMinutesAsHoursAndMinutes(permissionAllowedMinutes)})
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Regular Shift</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {formatShiftWindow(data.shiftStartTime, data.shiftEndTime)} ({data.regularShiftMinutes ?? 0} mins/day)
-                          </Typography>
-                        </Box>
-                        {additionalWorkingDays.length > 0 ? (
-                          additionalWorkingDays.map((day, index) => (
-                            <Box key={`${day.dayType || "additional"}-${index}`} sx={summaryRowSx}>
-                              <Typography sx={summaryLabelSx}>
-                                {day.label || formatWeekOffDay(day.dayType)}
-                              </Typography>
-                              <Typography sx={summaryValueSx}>
-                                {formatShiftWindow(day.timeIn, day.timeOut)}
-                              </Typography>
-                            </Box>
-                          ))
-                        ) : (
-                          <Box sx={summaryRowSx}>
-                            <Typography sx={summaryLabelSx}>Additional Working Days</Typography>
-                            <Typography sx={summaryValueSx}>Not configured</Typography>
-                          </Box>
-                        )}
-                      </Box>
-                    </Paper>
-
-                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
-                        <Typography sx={{ fontWeight: 700 }}>Actual Attendance</Typography>
-                        <Typography sx={{ color: "#6b5a7a" }}>Month Summary</Typography>
-                      </Box>
-                      <Box sx={{ display: "grid", gap: 1.15 }}>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Present Working Days</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {actualAttendance.presentWorkingDays ?? data.workedDays ?? 0}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Week Off Days</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {(actualAttendance.weekOffDays ?? data.weekOffDays ?? 0)} ({formatWeekOffDay(data.weekOffDay)})
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Late Attendance</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {lateDays} day{lateDays === 1 ? "" : "s"} ({formatMinutesAsHoursAndMinutes(totalLateMinutes)})
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>CL Utilized</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {actualAttendance.clUtilized ?? casualLeaveTakenCount ?? 0}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Permission Duration</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {permissionTakenCount} ({formatMinutesAsHoursAndMinutes(permissionTakenMinutes)})
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Public Holidays</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {actualAttendance.publicHolidays ?? (formatHolidaySummary(data)?.replace("Holidays - ", "") || "0")}
-                          </Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-
-                    <Paper sx={{ ...styles.panel, p: 3 }}>
-                      <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
-                        <Typography sx={{ fontWeight: 700 }}>Salary Calculation</Typography>
-                        <Typography sx={{ color: "#6b5a7a" }}>Monthly Formula</Typography>
-                      </Box>
-                      <Box sx={{ display: "grid", gap: 1.15 }}>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Basic Salary</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {formatINR(salaryCalculation.basicSalary ?? data.salary)}
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Scheduled Working Minutes</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {salaryCalculation.scheduledWorkingMinutes ?? data.expectedWorkingMinutes ?? 0} mins
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Payable Working Minutes</Typography>
-                          <Typography sx={summaryValueSx}>
-                            {salaryCalculation.payableWorkingMinutes ?? data.payableWorkingMinutes ?? data.payablePresentMinutes ?? 0} mins
-                          </Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={summaryLabelSx}>Per Minute Rate</Typography>
-                          <Typography sx={summaryValueSx}>{formatINR(perMinuteSalary)}</Typography>
-                        </Box>
-                        <Box sx={summaryRowSx}>
-                          <Typography sx={{ ...summaryLabelSx, fontWeight: 700 }}>Estimated Net Salary</Typography>
-                          <Typography sx={{ ...summaryValueSx, fontWeight: 700 }}>{formatINR(finalNetSalary)}</Typography>
-                        </Box>
-                      </Box>
-                    </Paper>
-                  </Grid>
-
-                  <Grid item xs={12} md={7}>
-                    <Typography variant="subtitle1" sx={styles.sectionTitle}>
-                      Payment Details
-                    </Typography>
-                    <Paper sx={{ ...styles.panel, p: 3, mb: 3 }}>
-                      <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Earnings</Typography>
-                      <Box sx={{ display: "grid", gap: 1.2, mb: 2.5 }}>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>Convenience</Typography>
-                          <TextField fullWidth name="convenience" value={paymentDetails.convenience} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
-                        </Box>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>OT</Typography>
-                          <TextField fullWidth value={overtimeSalary} variant="outlined" size="small" type="number" inputProps={{ readOnly: true }} sx={styles.inputField} />
-                        </Box>
-                        <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
-                          Approved OT: {overtimeMinutes} mins x {formatINR(data?.perMinuteSalary || 0)} = {formatINR(overtimeSalary)}
+                    </Grid>
+                    {[
+                      ["Basic Salary", formatINR(data.salary || 0)],
+                      ["Per Day Salary", formatINR(dashboardPerDaySalary)],
+                      ["Shift", formatShiftWindow(data.shiftStartTime, data.shiftEndTime)],
+                      ["Weekly Off", formatWeekOffDay(data.weekOffDay)],
+                      ["Allowed CL", `${data.casualLeaveBalance ?? 0} Days`],
+                      ["Used CL", `${data.paidCasualDays ?? 0} Days`],
+                      ["Remaining CL", `${remainingCl} Days`],
+                      ["Payroll Month", monthLabel],
+                    ].map(([label, value]) => (
+                      <Grid item xs={6} sm={4} md={1} key={label}>
+                        <Typography sx={{ fontSize: "0.72rem", color: "#64748b", fontWeight: 800, textTransform: "uppercase" }}>
+                          {label}
                         </Typography>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                          <Typography>Include this OT?</Typography>
-                          <RadioGroup row value={includeOvertime ? "yes" : "no"} onChange={(event) => {
-                            setIncludeOvertime(event.target.value === "yes");
-                            setNetSalary(null);
-                          }}>
-                            <FormControlLabel value="yes" control={<Radio size="small" />} label="Yes" />
-                            <FormControlLabel value="no" control={<Radio size="small" />} label="No" />
-                          </RadioGroup>
-                        </Box>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>Incentives</Typography>
-                          <TextField fullWidth name="incentives" value={paymentDetails.incentives} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
-                        </Box>
-                      </Box>
-                      <Typography sx={{ fontWeight: 700, mb: 1.5 }}>Deductions</Typography>
-                      <Box sx={{ display: "grid", gap: 1.2 }}>
-                        {SHOW_PF_SECTION && (
-                          <>
-                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                              <Typography>PF Amount</Typography>
-                              <TextField fullWidth name="pfAmount" value={paymentDetails.pfAmount} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
-                            </Box>
-                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                              <Typography>PF %</Typography>
-                              <TextField fullWidth name="pfPercentage" value={paymentDetails.pfPercentage} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, max: 100, step: 1 }} sx={styles.inputField} />
-                            </Box>
-                            <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
-                              Calculated PF Amount (on Basic Salary {formatINR(pfBaseSalary)}): {formatINR(resolvedPfAmount)}
-                            </Typography>
-                          </>
-                        )}
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>LOP (Days)</Typography>
-                          <TextField fullWidth name="lop" value={paymentDetails.lop} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: 1 }} sx={styles.inputField} />
-                        </Box>
-                        <Typography sx={{ color: "#6b5a7a", fontSize: "0.82rem", pl: 0.2 }}>
-                          LOP Deduction: {formatINR(lopDeductionAmount)} ({lopDays} day{lopDays === 1 ? "" : "s"} x {formatINR(perDaySalary)})
+                        <Typography sx={{ color: "#0f172a", fontWeight: 800, mt: 0.5 }}>
+                          {value}
                         </Typography>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>Advance</Typography>
-                          <TextField fullWidth name="advance" value={paymentDetails.advance} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
-                        </Box>
-                        <Box sx={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 1, alignItems: "center" }}>
-                          <Typography>Others</Typography>
-                          <TextField fullWidth name="others" value={paymentDetails.others} onChange={handlePaymentDetailChange} onWheel={(e) => e.target.blur()} variant="outlined" size="small" type="number" inputProps={{ min: 0, step: "0.01" }} sx={styles.inputField} />
-                        </Box>
-                      </Box>
-                    </Paper>
-
-                    <Paper sx={{ ...styles.panel, p: 3 }}>
-                      <Typography sx={{ fontWeight: 700, mb: 1 }}>Additional Allowance</Typography>
-                      <Box sx={{ display: "grid", gap: 1 }}>
-                        {additionalAllowances.map((item, index) => (
-                          <Box key={`allowance-${index}`} sx={{ display: "grid", gridTemplateColumns: "1fr 140px auto", gap: 1, alignItems: "center" }}>
-                            <TextField
-                              fullWidth
-                              placeholder="Allowance Name"
-                              value={item.name}
-                              onChange={(e) => handleAllowanceChange(index, "name", e.target.value)}
-                              variant="outlined"
-                              size="small"
-                              sx={styles.inputField}
-                            />
-                            <TextField
-                              fullWidth
-                              placeholder="Amount"
-                              value={item.amount}
-                              onChange={(e) => handleAllowanceChange(index, "amount", e.target.value)}
-                              onWheel={(e) => e.target.blur()}
-                              variant="outlined"
-                              size="small"
-                              type="number"
-                              inputProps={{ min: 0, step: "0.01" }}
-                              sx={styles.inputField}
-                            />
-                            <Button
-                              variant="outlined"
-                              color="inherit"
-                              onClick={() => removeAllowance(index)}
-                              disabled={additionalAllowances.length === 1}
-                            >
-                              Remove
-                            </Button>
-                          </Box>
-                        ))}
-                        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <Button variant="outlined" onClick={addAllowance}>
-                            + Add Allowance
-                          </Button>
-                          <Typography sx={{ fontWeight: 600 }}>
-                            Total: {formatINR(additionalAllowancesTotal)}
-                          </Typography>
-                        </Box>
-                        <Box
-                          sx={{
-                            mt: 1,
-                            p: 2,
-                            borderRadius: 2,
-                            border: "1px solid rgba(53,17,83,0.16)",
-                            background:
-                              "linear-gradient(135deg, rgba(106,27,154,0.1) 0%, rgba(53,17,83,0.06) 100%)",
-                            textAlign: "center",
-                          }}
-                        >
-                          <Typography sx={{ color: "#6b5a7a", fontSize: "0.9rem", fontWeight: 600 }}>
-                            Total Salary
-                          </Typography>
-                          <Typography sx={{ fontSize: { xs: "1.8rem", md: "2.2rem" }, fontWeight: 800, color: "#351153", lineHeight: 1.1 }}>
-                            {formatINR(finalNetSalary)}
-                          </Typography>
-                        </Box>
-                      </Box>
-                      <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 2, mt: 2 }}>
-                        <Button
-                          variant="contained"
-                          sx={styles.primaryButton}
-                          onClick={calculateNetSalary}
-                          size={isMobile ? "small" : "medium"}
-                        >
-                          Review & Calculate
-                        </Button>
-                        <Button
-                          variant="contained"
-                          sx={styles.confirmButton}
-                          onClick={handleGeneratePayslip}
-                          disabled={sendingEmail || emailSent || netSalary === null}
-                          size={isMobile ? "small" : "medium"}
-                        >
-                          {sendingEmail ? "Sending..." : emailSent ? "Email Sent" : netSalary === null ? "Review First" : "Generate Payslip"}
-                        </Button>
-                      </Box>
-                    </Paper>
+                      </Grid>
+                    ))}
                   </Grid>
+                </Paper>
+
+                <Grid container spacing={2.2} sx={{ mb: 3 }}>
+                  {[
+                    { label: "Current Earned Salary", value: formatINR(currentEarnedSalary), helper: "Till selected payroll date", color: "#16a34a", bg: "#dcfce7" },
+                    { label: "Paid Days", value: paidDays, helper: "Present + paid credits", color: "#0f5ea8", bg: "#dbeafe" },
+                    { label: "LOP Days", value: lopDayCount, helper: "Absent / unpaid dates", color: "#dc2626", bg: "#fee2e2" },
+                    { label: "Total Late Minutes", value: `${totalLateMinutes} min`, helper: `Late Deduction: -${formatINR(totalLateDeduction)}`, color: "#ea580c", bg: "#ffedd5" },
+                    { label: "Overtime Minutes", value: `${overtimeMinutes} min`, helper: `Overtime Amount: +${formatINR(totalOvertimeAmount || overtimeSalary)}`, color: "#7c3aed", bg: "#ede9fe" },
+                  ].map((card) => (
+                    <Grid item xs={12} sm={6} md={2.4} key={card.label}>
+                      <Paper sx={{ ...styles.statCard, height: "100%", borderTop: `4px solid ${card.color}` }}>
+                        <Box sx={{ width: 38, height: 38, borderRadius: 2, bgcolor: card.bg, mb: 1.4 }} />
+                        <Typography sx={styles.statLabel}>{card.label}</Typography>
+                        <Typography sx={{ ...styles.statValue, color: card.color }}>{card.value}</Typography>
+                        <Typography sx={{ color: "#64748b", fontSize: "0.82rem", mt: 0.6 }}>{card.helper}</Typography>
+                      </Paper>
+                    </Grid>
+                  ))}
                 </Grid>
+
               </Box>
             )}
 
             {(attendanceRecords.length > 0 || attendanceError) && (
               <Box sx={{ mt: 4 }}>
-                <Typography variant="subtitle1" sx={styles.sectionTitle}>
-                  Attendance Report ({format(selectedDate, "MMMM yyyy")})
-                </Typography>
+                <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2, justifyContent: "space-between", alignItems: { xs: "stretch", md: "center" }, mb: 2 }}>
+                  <Box>
+                    <Typography variant="subtitle1" sx={{ ...styles.sectionTitle, mb: 0.5 }}>
+                      Daily Payroll Details
+                    </Typography>
+                    <Typography sx={{ color: "#64748b" }}>
+                      Transparent day-by-day salary calculation for {monthLabel}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: "flex", gap: 1.2, flexWrap: "wrap" }}>
+                    <TextField
+                      size="small"
+                      placeholder="Search date, status, employee, remarks"
+                      value={payrollSearch}
+                      onChange={(event) => setPayrollSearch(event.target.value)}
+                      sx={{ ...styles.inputField, minWidth: { xs: "100%", sm: 260 } }}
+                    />
+                    <FormControl size="small" sx={{ ...styles.inputField, minWidth: 180 }}>
+                      <InputLabel>Status Filter</InputLabel>
+                      <Select
+                        value={payrollStatusFilter}
+                        label="Status Filter"
+                        onChange={(event) => setPayrollStatusFilter(event.target.value)}
+                      >
+                        <MenuItem value="">All Status</MenuItem>
+                        {payrollStatusOptions.map((option) => (
+                          <MenuItem key={option} value={option}>{option}</MenuItem>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Button variant="outlined" sx={styles.secondaryButton} onClick={exportPayrollCsv} disabled={!filteredPayrollRows.length}>
+                      Export
+                    </Button>
+                  </Box>
+                </Box>
                 {attendanceError && (
                   <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
                     {attendanceError}
@@ -2399,129 +1932,126 @@ function EmployeePayrollViewer() {
                 )}
                 {attendanceRecords.length > 0 && (
                   <>
-                    <Grid container spacing={2} sx={{ mb: 2 }}>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2 }}>
-                          <Typography sx={styles.statLabel}>Total Records</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800 }}>
-                            {attendanceSummary.total}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e8f5e8" }}>
-                          <Typography sx={styles.statLabel}>Present</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#2e7d32" }}>
-                            {attendanceSummary.present}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#ffebee" }}>
-                          <Typography sx={styles.statLabel}>Absent</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#d32f2f" }}>
-                            {attendanceSummary.absent}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#e3f2fd" }}>
-                          <Typography sx={styles.statLabel}>Week Off</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#0288d1" }}>
-                            {attendanceSummary.weekOff}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                      <Grid item xs={12} sm={6} md={2.4}>
-                        <Paper sx={{ ...styles.panel, p: 2, backgroundColor: "#fff8e1" }}>
-                          <Typography sx={styles.statLabel}>Holiday</Typography>
-                          <Typography variant="h5" sx={{ fontWeight: 800, color: "#ed6c02" }}>
-                            {attendanceSummary.holiday}
-                          </Typography>
-                        </Paper>
-                      </Grid>
-                    </Grid>
-
                   <TableContainer component={Paper} sx={styles.panel}>
-                    <Table sx={{ minWidth: 1100, tableLayout: "fixed" }}>
+                    <Table sx={{ minWidth: 1500 }}>
                       <TableHead>
-                        <TableRow sx={{ backgroundColor: "#351153" }}>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Date</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Day</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "16%" }}>Employee</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "10%" }}>Status</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time In</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Time Out</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "12%" }}>Working Hours</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Late Arrival</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "9%" }}>Missed Times</TableCell>
-                          <TableCell sx={{ color: "white", fontWeight: "bold", width: "8%" }}>Location</TableCell>
+                        <TableRow sx={{ backgroundColor: "#eaf4ff" }}>
+                          {["Date", "Day", "Status", "Time In", "Time Out", "Late Min", "Late Deduction", "OT Min", "OT Amount", "Per Day Salary", "Daily Earned Salary", "Remarks"].map((head) => (
+                            <TableCell key={head} sx={{ color: "#0f172a", fontWeight: 800 }}>{head}</TableCell>
+                          ))}
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {attendanceRecords.map((record, index) => {
+                        {filteredPayrollRows.map((record, index) => {
                           const derivedStatus = getDerivedAttendanceStatus(record);
                           const statusBucket = getAttendanceStatusBucket(record);
                           const displayStatus = statusBucket || derivedStatus;
-                          const lateArrivalMinutes = getLateArrivalMinutes(record);
-                          const missedMinutes = getComputedMissedMinutes(record);
-                          const statusColor =
-                            statusBucket === "Present"
-                              ? "success"
-                              : statusBucket === "Absent"
-                              ? "error"
-                              : derivedStatus === "Late"
-                              ? "warning"
-                              : statusBucket === "Week Off"
-                              ? "info"
-                              : statusBucket === "Holiday" || derivedStatus === "Leave"
-                              ? "secondary"
-                              : "default";
+                          const lateArrivalMinutes = parseNumber(record.lateMinutes ?? getLateArrivalMinutes(record));
+                          const lateDeduction = parseNumber(record.lateDeductionAmount ?? record.lateDeduction ?? 0);
+                          const otMinutes = parseNumber(record.approvedOvertimeMinutes ?? 0);
+                          const otAmount = parseNumber(record.overtimeAmount ?? 0);
+                          const perDay = parseNumber(record.perDaySalaryAmount ?? record.perDaySalary ?? 0);
+                          const dailyEarned = parseNumber(record.dailyEarnedSalary ?? record.dayEarnedAmount ?? 0);
 
                           return (
                             <TableRow key={record.id ?? `${record.date || "row"}-${index}`} hover>
                               <TableCell>{formatAttendanceDate(record.date)}</TableCell>
                               <TableCell>{formatDayName(record.date)}</TableCell>
                               <TableCell>
-                                {record.employee
-                                  ? `${record.employee.firstName || ""} ${record.employee.lastName || ""}`.trim()
-                                  : data?.firstName
-                                  ? `${data.firstName} ${data.lastName || ""}`.trim()
-                                  : "-"}
-                              </TableCell>
-                              <TableCell>
-                                <Chip label={displayStatus} color={statusColor} size="small" />
+                                <Chip label={displayStatus} size="small" sx={{ ...statusBadgeSx(displayStatus), fontWeight: 800 }} />
                               </TableCell>
                               <TableCell>{formatTimeValue(record.timeIn)}</TableCell>
                               <TableCell>{formatTimeValue(record.timeOut)}</TableCell>
-                              <TableCell>{formatWorkingHours(record.timeIn, record.timeOut)}</TableCell>
                               <TableCell>
-                                {lateArrivalMinutes > 0 ? (
-                                  <Chip
-                                    label={`${lateArrivalMinutes} min`}
-                                    color="warning"
-                                    size="small"
-                                    variant="outlined"
-                                  />
-                                ) : (
-                                  "-"
-                                )}
+                                {lateArrivalMinutes > 0 ? `${lateArrivalMinutes} min` : "0"}
                               </TableCell>
-                              <TableCell>
-                                <Chip
-                                  label={`${missedMinutes} min`}
-                                  color={missedMinutes > 0 ? "error" : "success"}
-                                  size="small"
-                                  variant="outlined"
-                                />
+                              <TableCell sx={{ color: lateDeduction > 0 ? "#dc2626" : "#64748b", fontWeight: 700 }}>
+                                {lateDeduction > 0 ? `-${formatINR(lateDeduction)}` : formatINR(0)}
                               </TableCell>
-                              <TableCell>{record.location || "-"}</TableCell>
+                              <TableCell>{otMinutes > 0 ? `${otMinutes} min` : "0"}</TableCell>
+                              <TableCell sx={{ color: otAmount > 0 ? "#16a34a" : "#64748b", fontWeight: 700 }}>
+                                {otAmount > 0 ? `+${formatINR(otAmount)}` : formatINR(0)}
+                              </TableCell>
+                              <TableCell>{formatINR(perDay)}</TableCell>
+                              <TableCell sx={{ color: dailyEarned > 0 ? "#16a34a" : "#dc2626", fontWeight: 800 }}>
+                                {formatINR(dailyEarned)}
+                              </TableCell>
+                              <TableCell sx={{ minWidth: 220 }}>{record.payrollRemark || "-"}</TableCell>
                             </TableRow>
                           );
                         })}
                       </TableBody>
                     </Table>
                   </TableContainer>
+                  <Grid container spacing={3} sx={{ mt: 3 }}>
+                    <Grid item xs={12} md={7}>
+                      <Paper sx={{ ...styles.panel, p: 3 }}>
+                        <Typography sx={{ fontWeight: 800, color: "#0f172a", mb: 2 }}>
+                          Month to Date Summary ({monthLabel})
+                        </Typography>
+                        <Grid container spacing={1.5}>
+                          {[
+                            ["Total Days", monthToDateSummary.total],
+                            ["Present Days", monthToDateSummary.present],
+                            ["Week Off Days", monthToDateSummary.weekOff],
+                            ["Public Holidays", monthToDateSummary.holiday],
+                            ["CL Approved", monthToDateSummary.clApproved],
+                            ["CL Pending", monthToDateSummary.pending],
+                            ["Absent / LOP", monthToDateSummary.lop],
+                          ].map(([label, value]) => (
+                            <Grid item xs={6} sm={4} key={label}>
+                              <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: "#f8fafc", border: "1px solid #e2e8f0" }}>
+                                <Typography sx={{ color: "#64748b", fontSize: "0.78rem", fontWeight: 700 }}>{label}</Typography>
+                                <Typography sx={{ fontWeight: 900, color: "#0f172a", fontSize: "1.2rem" }}>{value}</Typography>
+                              </Box>
+                            </Grid>
+                          ))}
+                        </Grid>
+                        <Box sx={{ display: "grid", gap: 1.2, mt: 2.5 }}>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Base Salary Earned</Typography>
+                            <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Late Deduction</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#dc2626" }}>-{formatINR(totalLateDeduction)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Overtime Amount</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#16a34a" }}>+{formatINR(totalOvertimeAmount || overtimeSalary)}</Typography>
+                          </Box>
+                        </Box>
+                      </Paper>
+                    </Grid>
+                    <Grid item xs={12} md={5}>
+                      <Paper sx={{ ...styles.panel, p: 3, borderTop: "4px solid #0f5ea8" }}>
+                        <Typography sx={{ fontWeight: 800, color: "#0f172a", mb: 2 }}>
+                          {data.payrollStatus === "Ready" ? "Final Net Salary" : "Estimated Net Salary (Till Date)"}
+                        </Typography>
+                        <Box sx={{ display: "grid", gap: 1.2 }}>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Total Earned Salary</Typography>
+                            <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary || backendEstimatedSalary)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Late Deduction</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#dc2626" }}>-{formatINR(totalLateDeduction)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={summaryLabelSx}>Overtime Amount</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#16a34a" }}>+{formatINR(totalOvertimeAmount || overtimeSalary)}</Typography>
+                          </Box>
+                          <Box sx={{ borderTop: "1px solid #e2e8f0", pt: 1.5, mt: 0.5, ...summaryRowSx }}>
+                            <Typography sx={{ ...summaryLabelSx, fontWeight: 900 }}>Current Net Salary</Typography>
+                            <Typography sx={{ ...summaryValueSx, fontWeight: 900, color: "#0f5ea8", fontSize: "1.25rem" }}>{formatINR(currentEarnedSalary)}</Typography>
+                          </Box>
+                          <Typography sx={{ color: "#64748b", fontSize: "0.86rem", mt: 1 }}>
+                            Final Net Salary will be calculated at the end of the month.
+                          </Typography>
+                        </Box>
+                      </Paper>
+                    </Grid>
+                  </Grid>
                   </>
                 )}
               </Box>
