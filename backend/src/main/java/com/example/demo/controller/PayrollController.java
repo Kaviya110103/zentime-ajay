@@ -185,10 +185,14 @@ public class PayrollController {
 
         Map<String, Object> salaryCalculation = new HashMap<>();
         salaryCalculation.put("basicSalary", result.basicSalary());
+        salaryCalculation.put("earnedSalary", result.estimatedNetSalary());
         salaryCalculation.put("scheduledWorkingMinutes", result.scheduledWorkingMinutes());
         salaryCalculation.put("payableWorkingMinutes", result.payableWorkingMinutes());
         salaryCalculation.put("perMinuteRate", result.perMinuteRate());
         salaryCalculation.put("estimatedNetSalary", result.estimatedNetSalary());
+        salaryCalculation.put("lateAmount", result.lateAmount());
+        salaryCalculation.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
+        salaryCalculation.put("unpaidMissingAmount", result.attendanceDeduction());
 
         response.put("expectedAttendance", expectedAttendance);
         response.put("actualAttendance", actualAttendance);
@@ -202,6 +206,8 @@ public class PayrollController {
         response.put("attendanceSummary", attendanceSummary);
         response.put("overtimeAmount", result.overtimeAmount());
         response.put("proratedBasic", result.proratedBasic());
+        response.put("lateAmount", result.lateAmount());
+        response.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
         response.put("attendanceDeduction", result.attendanceDeduction());
         response.put("payrollStatus", java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))
                 ? "Ready" : "Provisional");

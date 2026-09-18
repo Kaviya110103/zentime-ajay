@@ -274,8 +274,12 @@ public class PayrollCalculationService {
         double perMinuteSalary = scheduledWorkingMinutes > 0 ? salary / scheduledWorkingMinutes : 0.0;
         double perHourSalary = perMinuteSalary * 60.0;
         double perDaySalary = scheduledWorkingDays > 0 ? salary / scheduledWorkingDays : 0.0;
-        double netSalary = moneyForMinutes(monthlySalary, payableWorkingMinutes, scheduledWorkingMinutes).doubleValue();
-        reconcileDailyAmounts(dailyRows, "dayEarnedAmount", BigDecimal.valueOf(netSalary));
+        int unpaidMissingMinutes = Math.max(0, absentMinutes - totalLateMinutes);
+        BigDecimal proratedBasic = moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes);
+        BigDecimal lateAmount = moneyForMinutes(monthlySalary, totalLateMinutes, scheduledWorkingMinutes);
+        BigDecimal unpaidMissingAmount = moneyForMinutes(monthlySalary, unpaidMissingMinutes, scheduledWorkingMinutes);
+        double netSalary = proratedBasic.subtract(unpaidMissingAmount).doubleValue();
+        reconcileDailyAmounts(dailyRows, "dayEarnedAmount", proratedBasic);
         BigDecimal overtimeAmount = moneyForMinutes(monthlySalary, overtimeMinutes, scheduledWorkingMinutes);
         reconcileDailyAmounts(dailyRows, "overtimeAmount", overtimeAmount);
 
@@ -334,10 +338,12 @@ public class PayrollCalculationService {
                 payableWorkingMinutes,
                 salary,
                 perMinuteSalary,
-                netSalary,
+                proratedBasic.doubleValue(),
                 additionalWorkingDays, dailyRows, overtimeAmount,
-                moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes),
-                moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes).subtract(BigDecimal.valueOf(netSalary)));
+                proratedBasic,
+                unpaidMissingAmount,
+                lateAmount,
+                unpaidMissingMinutes);
     }
 
     static BigDecimal moneyForMinutes(BigDecimal salary, int minutes, int denominator) {
@@ -1244,9 +1250,11 @@ public class PayrollCalculationService {
             List<Map<String, Object>> dailyRows,
             BigDecimal overtimeAmount,
             BigDecimal proratedBasic,
-            BigDecimal attendanceDeduction) {
+            BigDecimal attendanceDeduction,
+            BigDecimal lateAmount,
+            int unpaidMissingMinutes) {
         public static PayrollResult empty() {
-            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0);
         }
     }
 }
