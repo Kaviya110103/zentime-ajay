@@ -272,6 +272,7 @@ public class PayrollCalculationService {
                     && !paidLeave
                     && !weekOffPaid
                     && !holidayPaid
+                    && permission <= 0
                     && !payrollPending) {
                 lopDates.add(date);
             }
