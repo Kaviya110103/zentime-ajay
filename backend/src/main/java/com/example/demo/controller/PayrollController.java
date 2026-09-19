@@ -193,6 +193,9 @@ public class PayrollController {
         salaryCalculation.put("lateAmount", result.lateAmount());
         salaryCalculation.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
         salaryCalculation.put("unpaidMissingAmount", result.attendanceDeduction());
+        salaryCalculation.put("lopAmount", result.attendanceDeduction());
+        salaryCalculation.put("permissionExcessMinutes", result.permissionExcessMinutes());
+        salaryCalculation.put("permissionExcessAmount", result.permissionExcessAmount());
 
         response.put("expectedAttendance", expectedAttendance);
         response.put("actualAttendance", actualAttendance);
@@ -209,6 +212,9 @@ public class PayrollController {
         response.put("lateAmount", result.lateAmount());
         response.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
         response.put("attendanceDeduction", result.attendanceDeduction());
+        response.put("lopAmount", result.attendanceDeduction());
+        response.put("permissionExcessMinutes", result.permissionExcessMinutes());
+        response.put("permissionExcessAmount", result.permissionExcessAmount());
         response.put("payrollStatus", java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))
                 ? "Ready" : "Provisional");
         response.put("additionalWorkingDaysCount", result.additionalWorkingDays());

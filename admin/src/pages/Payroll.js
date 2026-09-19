@@ -420,6 +420,12 @@ function EmployeePayrollViewer() {
   const permissionTakenMinutes = parseNumber(
     actualAttendance.permissionDurationMinutes ?? data?.permissionTakenMinutes ?? 0
   );
+  const permissionExcessMinutes = parseNumber(
+    salaryCalculation.permissionExcessMinutes ?? data?.permissionExcessMinutes ?? 0
+  );
+  const permissionExcessAmount = parseNumber(
+    salaryCalculation.permissionExcessAmount ?? data?.permissionExcessAmount ?? 0
+  );
   const lateDays = parseNumber(actualAttendance.lateAttendanceDays ?? data?.lateDays ?? 0);
   const totalLateMinutes = parseNumber(
     actualAttendance.lateAttendanceMinutes ?? data?.totalLateMinutes ?? 0
@@ -471,10 +477,12 @@ function EmployeePayrollViewer() {
     0
   );
   const basicSalary = parseNumber(data?.salary || 0);
-  const cappedBaseEarnedSalary = basicSalary > 0
-    ? Math.min(Math.max(0, rawDailyEarnedSalary - totalOvertimeAmount), basicSalary)
-    : Math.max(0, rawDailyEarnedSalary - totalOvertimeAmount);
-  const currentEarnedSalary = roundCurrency(cappedBaseEarnedSalary);
+  const backendBaseEarnedSalary = parseNumber(
+    data?.proratedBasic ?? salaryCalculation.basicSalary ?? basicSalary
+  );
+  const currentEarnedSalary = roundCurrency(
+    backendBaseEarnedSalary || Math.max(0, rawDailyEarnedSalary - totalOvertimeAmount)
+  );
   const rowPresentDays = attendanceRecords.filter((row) => {
       const status = String(row?.displayStatus || row?.countStatus || "").toLowerCase();
       return status.includes("present");
@@ -494,13 +502,19 @@ function EmployeePayrollViewer() {
     (sum, row) => sum + parseNumber(row?.lateDeductionAmount ?? row?.lateDeduction ?? 0),
     0
   );
+  const lopDeductionAmount = roundCurrency(
+    salaryCalculation.lopAmount ??
+      salaryCalculation.unpaidMissingAmount ??
+      data?.attendanceDeduction ??
+      lopDayCount * dashboardPerDaySalary
+  );
   const incentiveAmount = parseNumber(paymentDetails.incentives);
   const advanceDeduction = parseNumber(paymentDetails.advance);
   const otherDeduction = parseNumber(paymentDetails.others);
   const selectedOvertimeAmount = includeOvertime ? parseNumber(totalOvertimeAmount || overtimeSalary) : 0;
   const selectedLateDeduction = applyLateDeduction ? totalLateDeduction : 0;
   const estimatedNetSalary = roundCurrency(
-    currentEarnedSalary + incentiveAmount + selectedOvertimeAmount - selectedLateDeduction - advanceDeduction - otherDeduction
+    currentEarnedSalary + incentiveAmount + selectedOvertimeAmount - lopDeductionAmount - selectedLateDeduction - advanceDeduction - otherDeduction
   );
   const previewEarnings = [
     { label: "Base / Earned Salary", amount: currentEarnedSalary },
@@ -509,6 +523,7 @@ function EmployeePayrollViewer() {
   ].filter((item) => item.amount > 0);
 
   const previewDeductions = [
+    { label: "LOP Deduction", amount: lopDeductionAmount },
     { label: "Late Deduction", amount: selectedLateDeduction },
     ...(SHOW_PF_SECTION ? [{ label: "PF", amount: resolvedPfAmount }] : []),
     { label: "Advance", amount: advanceDeduction },
@@ -1778,6 +1793,8 @@ function EmployeePayrollViewer() {
                     { label: "Paid Days", value: paidDays, helper: "Employee present days this month", color: "#38bdf8", bg: "rgba(56,189,248,0.16)" },
                     { label: "Holiday", value: holidayDayCount, helper: "Paid public holiday count", color: "#14b8a6", bg: "rgba(20,184,166,0.16)" },
                     { label: "LOP Days", value: lopDayCount, helper: "Absent / unpaid dates", color: "#ef4444", bg: "rgba(239,68,68,0.16)" },
+                    { label: "Approved Permission", value: `${permissionTakenMinutes} min`, helper: "Paid approved permission", color: "#0ea5e9", bg: "rgba(14,165,233,0.16)" },
+                    { label: "Permission Excess", value: `${permissionExcessMinutes} min`, helper: `LOP Amount: -${formatINR(permissionExcessAmount)}`, color: "#f43f5e", bg: "rgba(244,63,94,0.16)" },
                     { label: "Total Late Minutes", value: `${totalLateMinutes} min`, helper: `Late Deduction: -${formatINR(totalLateDeduction)}`, color: "#fb923c", bg: "rgba(251,146,60,0.16)" },
                     { label: "Overtime Minutes", value: `${overtimeMinutes} min`, helper: `Overtime Amount: +${formatINR(totalOvertimeAmount || overtimeSalary)}`, color: "#a855f7", bg: "rgba(168,85,247,0.16)" },
                   ].map((card) => (
@@ -1999,7 +2016,7 @@ function EmployeePayrollViewer() {
                     <Table sx={{ minWidth: 1500 }}>
                       <TableHead>
                         <TableRow sx={{ backgroundColor: "#101518" }}>
-                          {["Date", "Day", "Status", "Time In", "Time Out", "Late Min", "Late Deduction", "OT Min", "OT Amount", "Per Day Salary", "Daily Earned Salary", "Remarks"].map((head) => (
+                          {["Date", "Day", "Status", "Time In", "Time Out", "Approved Permission", "Permission Excess", "Late Min", "Late Deduction", "OT Min", "OT Amount", "Per Day Salary", "Daily Earned Salary", "Remarks"].map((head) => (
                             <TableCell key={head} sx={{ color: "#e5f3ff", fontWeight: 900, borderBottom: "1px solid rgba(125,211,252,0.16)" }}>{head}</TableCell>
                           ))}
                         </TableRow>
@@ -2009,6 +2026,8 @@ function EmployeePayrollViewer() {
                           const derivedStatus = getDerivedAttendanceStatus(record);
                           const statusBucket = getAttendanceStatusBucket(record);
                           const displayStatus = statusBucket || derivedStatus;
+                          const approvedPermission = parseNumber(record.approvedPermissionMinutes ?? 0);
+                          const permissionExcess = parseNumber(record.permissionExcessMinutes ?? 0);
                           const lateArrivalMinutes = parseNumber(record.lateMinutes ?? getLateArrivalMinutes(record));
                           const lateDeduction = parseNumber(record.lateDeductionAmount ?? record.lateDeduction ?? 0);
                           const otMinutes = parseNumber(record.approvedOvertimeMinutes ?? 0);
@@ -2035,6 +2054,12 @@ function EmployeePayrollViewer() {
                               </TableCell>
                               <TableCell>{formatTimeValue(record.timeIn)}</TableCell>
                               <TableCell>{formatTimeValue(record.timeOut)}</TableCell>
+                              <TableCell sx={{ color: approvedPermission > 0 ? "#38bdf8 !important" : "#64748b !important", fontWeight: 700 }}>
+                                {approvedPermission > 0 ? `${approvedPermission} min` : "0"}
+                              </TableCell>
+                              <TableCell sx={{ color: permissionExcess > 0 ? "#ef4444 !important" : "#64748b !important", fontWeight: 700 }}>
+                                {permissionExcess > 0 ? `${permissionExcess} min` : "0"}
+                              </TableCell>
                               <TableCell>
                                 {lateArrivalMinutes > 0 ? `${lateArrivalMinutes} min` : "0"}
                               </TableCell>
@@ -2086,6 +2111,18 @@ function EmployeePayrollViewer() {
                             <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary)}</Typography>
                           </Box>
                           <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>LOP Deduction</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(lopDeductionAmount)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Approved Permission</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#38bdf8" }}>{permissionTakenMinutes} min</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Permission Excess LOP</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(permissionExcessAmount)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
                             <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Late Deduction</Typography>
                             <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(totalLateDeduction)}</Typography>
                           </Box>
@@ -2107,6 +2144,18 @@ function EmployeePayrollViewer() {
                             <Typography sx={summaryValueSx}>{formatINR(currentEarnedSalary || backendEstimatedSalary)}</Typography>
                           </Box>
                           <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>LOP Deduction</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(lopDeductionAmount)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Approved Permission</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#38bdf8" }}>{permissionTakenMinutes} min</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
+                            <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Permission Excess LOP</Typography>
+                            <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(permissionExcessAmount)}</Typography>
+                          </Box>
+                          <Box sx={summaryRowSx}>
                             <Typography sx={{ ...summaryLabelSx, color: "rgba(255,255,255,0.82)" }}>Late Deduction</Typography>
                             <Typography sx={{ ...summaryValueSx, color: "#ef4444" }}>-{formatINR(totalLateDeduction)}</Typography>
                           </Box>
@@ -2116,7 +2165,7 @@ function EmployeePayrollViewer() {
                           </Box>
                           <Box sx={{ borderTop: "1px solid rgba(255,255,255,0.12)", pt: 1.5, mt: 0.5, ...summaryRowSx }}>
                             <Typography sx={{ ...summaryLabelSx, fontWeight: 900, color: "#ffffff" }}>Current Net Salary</Typography>
-                            <Typography sx={{ ...summaryValueSx, fontWeight: 900, color: "#70c7ff", fontSize: "1.25rem" }}>{formatINR(currentEarnedSalary)}</Typography>
+                            <Typography sx={{ ...summaryValueSx, fontWeight: 900, color: "#70c7ff", fontSize: "1.25rem" }}>{formatINR(estimatedNetSalary)}</Typography>
                           </Box>
                           <Typography sx={{ color: "rgba(255,255,255,0.68)", fontSize: "0.86rem", mt: 1 }}>
                             Final Net Salary will be calculated at the end of the month.
