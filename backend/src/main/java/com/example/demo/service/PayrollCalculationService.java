@@ -220,6 +220,7 @@ public class PayrollCalculationService {
         int attendancePresentMinutesTotal = 0;
         int payableRegularMinutes = 0;
         int eligibleScheduledMinutes = 0;
+        Set<LocalDate> lopDates = new HashSet<>();
         List<Map<String, Object>> dailyRows = new ArrayList<>();
         for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
             if (joiningDate != null && date.isBefore(joiningDate)) continue;
@@ -251,9 +252,20 @@ public class PayrollCalculationService {
             int unpaidMissing = Math.max(0, scheduledMinutes - payable);
             int lateMinutes = Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
             boolean weekOffPaid = objectBoolean(day.get("weekOff"));
-            boolean holidayPaid = objectBoolean(day.get("holiday")) || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
+            boolean holidayPaid = holidayFractionByDate.containsKey(date)
+                    || objectBoolean(day.get("holiday"))
+                    || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
             boolean presentWithClosedPunch = payable > 0 && hasValue(day.get("timeIn")) && hasValue(day.get("timeOut"));
             boolean paidPayrollDay = presentWithClosedPunch || paidLeave || weekOffPaid || holidayPaid;
+            boolean payrollPending = objectBoolean(day.get("payrollPending"));
+            if (scheduledMinutes > 0
+                    && !presentWithClosedPunch
+                    && !paidLeave
+                    && !weekOffPaid
+                    && !holidayPaid
+                    && !payrollPending) {
+                lopDates.add(date);
+            }
             int dailyRateMinutes = scheduledMinutes > 0 ? scheduledMinutes : normalShiftMinutes;
             BigDecimal lateDeductionAmount = moneyForMinutes(baseDailySalary, lateMinutes, Math.max(1, dailyRateMinutes));
             day.put("unpaidMissingMinutes", unpaidMissing);
@@ -281,9 +293,7 @@ public class PayrollCalculationService {
                 .mapToInt(Integer::intValue)
                 .sum();
         int absentMinutes = Math.max(0, eligibleScheduledMinutes - payableScheduledMinutes);
-        int absentDays = normalShiftMinutes > 0
-                ? (int) Math.ceil(absentMinutes / (double) normalShiftMinutes)
-                : 0;
+        int absentDays = lopDates.size();
         double payablePresentDays = normalShiftMinutes > 0
                 ? payableScheduledMinutes / (double) normalShiftMinutes
                 : 0.0;
