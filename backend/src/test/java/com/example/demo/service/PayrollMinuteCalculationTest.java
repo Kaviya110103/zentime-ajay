@@ -75,12 +75,12 @@ class PayrollMinuteCalculationTest {
         var first = records.get(0); first.setTimeIn(first.getTimeIn().plusMinutes(20)); first.setTimeOut(first.getTimeOut().minusMinutes(40));
         var result = calculate();
         assertThat(result.estimatedNetSalary()).isEqualTo(16740);
-        assertThat(result.netSalary()).isEqualTo(16700);
+        assertThat(result.netSalary()).isEqualTo(16740);
         assertThat(result.lateAttendanceMinutes()).isEqualTo(20);
         assertThat(result.absentMinutes()).isEqualTo(60);
-        assertThat(result.unpaidMissingMinutes()).isEqualTo(40);
+        assertThat(result.unpaidMissingMinutes()).isEqualTo(0);
         assertThat(result.lateAmount()).isEqualByComparingTo("20");
-        assertThat(result.attendanceDeduction()).isEqualByComparingTo("40");
+        assertThat(result.attendanceDeduction()).isEqualByComparingTo("0");
     }
     @Test void unpaidLeaveIsNotPaid() {
         records.remove(0); approval("Unpaid Leave", 1);
@@ -96,9 +96,11 @@ class PayrollMinuteCalculationTest {
         var result = calculate();
         assertThat(result.permissionDurationMinutes()).isEqualTo(60);
         assertThat(result.estimatedNetSalary()).isEqualTo(16740);
-        assertThat(result.netSalary()).isEqualTo(16740);
-        assertThat(result.lateAttendanceMinutes()).isEqualTo(120);
-        assertThat(result.lateAmount()).isEqualByComparingTo("120");
+        assertThat(result.netSalary()).isEqualTo(16680);
+        assertThat(result.lateAttendanceMinutes()).isEqualTo(0);
+        assertThat(result.lateAmount()).isEqualByComparingTo("0");
+        assertThat(result.permissionExcessMinutes()).isEqualTo(60);
+        assertThat(result.permissionExcessAmount()).isEqualByComparingTo("60");
     }
     @Test void permissionWhileAlreadyWorkingDoesNotCreditAnotherAbsence() {
         records.remove(1); var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("11:00");
@@ -112,6 +114,8 @@ class PayrollMinuteCalculationTest {
         assertThat(result.netSalary()).isEqualTo(16260);
         assertThat(result.dailyRows().get(0).get("paidCreditMinutes")).isEqualTo(60);
         assertThat(result.dailyRows().get(0).get("unpaidMissingMinutes")).isEqualTo(480);
+        assertThat(result.permissionExcessMinutes()).isEqualTo(480);
+        assertThat(result.attendanceDeduction()).isEqualByComparingTo("480");
     }
     @Test void missingSalaryRequiresReviewInsteadOfZeroPayroll() {
         employee.setSalary(null);

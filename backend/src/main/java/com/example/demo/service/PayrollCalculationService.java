@@ -167,7 +167,6 @@ public class PayrollCalculationService {
         int overtimeMinutes = 0;
 
         Set<LocalDate> presentWorkingDates = new HashSet<>();
-        Set<LocalDate> lateDates = new HashSet<>();
         Map<LocalDate, Integer> classifiedWorkedMinutesByDate = new HashMap<>();
         Map<LocalDate, Integer> classifiedLateMinutesByDate = new HashMap<>();
         Map<LocalDate, Integer> classifiedPayableMinutesByDate = new HashMap<>();
@@ -192,12 +191,14 @@ public class PayrollCalculationService {
                 }
             }
             if (missedMinutes > 0) {
-                lateDates.add(date);
                 classifiedLateMinutesByDate.merge(date, missedMinutes, Integer::sum);
             }
         }
 
         int approvedPermissionMinutes = 0;
+        int permissionExcessMinutes = 0;
+        Set<LocalDate> chargeableLateDates = new HashSet<>();
+        int totalLateMinutes = 0;
         Set<LocalDate> paidDates = new HashSet<>(leaveBuckets.paidLeaveDates);
         paidDates.addAll(leaveBuckets.paidCasualDates);
         Map<LocalDate, Map<String, Object>> permissionSchedule = new HashMap<>();
@@ -220,6 +221,7 @@ public class PayrollCalculationService {
         int attendancePresentMinutesTotal = 0;
         int payableRegularMinutes = 0;
         int eligibleScheduledMinutes = 0;
+        Set<LocalDate> lopDates = new HashSet<>();
         List<Map<String, Object>> dailyRows = new ArrayList<>();
         for (LocalDate date = firstDate; !date.isAfter(lastDate); date = date.plusDays(1)) {
             if (joiningDate != null && date.isBefore(joiningDate)) continue;
@@ -249,13 +251,37 @@ public class PayrollCalculationService {
             day.put("payableMinutes", payable);
             day.put("approvedOvertimeMinutes", ot);
             int unpaidMissing = Math.max(0, scheduledMinutes - payable);
-            int lateMinutes = Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
+            int permissionExcess = permission > 0 ? unpaidMissing : 0;
+            permissionExcessMinutes += permissionExcess;
+            int lateMinutes = permission > 0
+                    ? 0
+                    : Math.max(0, classifiedLateMinutesByDate.getOrDefault(date, 0));
+            if (lateMinutes > 0) {
+                chargeableLateDates.add(date);
+                totalLateMinutes += lateMinutes;
+            }
             boolean weekOffPaid = objectBoolean(day.get("weekOff"));
-            boolean holidayPaid = objectBoolean(day.get("holiday")) || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
+            boolean holidayPaid = holidayFractionByDate.containsKey(date)
+                    || objectBoolean(day.get("holiday"))
+                    || "Holiday".equalsIgnoreCase(String.valueOf(day.getOrDefault("displayStatus", "")));
             boolean presentWithClosedPunch = payable > 0 && hasValue(day.get("timeIn")) && hasValue(day.get("timeOut"));
             boolean paidPayrollDay = presentWithClosedPunch || paidLeave || weekOffPaid || holidayPaid;
+            boolean payrollPending = objectBoolean(day.get("payrollPending"));
+            if (scheduledMinutes > 0
+                    && !presentWithClosedPunch
+                    && !paidLeave
+                    && !weekOffPaid
+                    && !holidayPaid
+                    && permission <= 0
+                    && !payrollPending) {
+                lopDates.add(date);
+            }
             int dailyRateMinutes = scheduledMinutes > 0 ? scheduledMinutes : normalShiftMinutes;
             BigDecimal lateDeductionAmount = moneyForMinutes(baseDailySalary, lateMinutes, Math.max(1, dailyRateMinutes));
+            BigDecimal permissionExcessAmount = moneyForMinutes(monthlySalary, permissionExcess, scheduledWorkingMinutes);
+            day.put("approvedPermissionMinutes", permission);
+            day.put("permissionExcessMinutes", permissionExcess);
+            day.put("permissionExcessAmount", permissionExcessAmount);
             day.put("unpaidMissingMinutes", unpaidMissing);
             day.put("perDaySalaryAmount", baseDailySalary);
             day.put("perDaySalary", baseDailySalary);
@@ -272,18 +298,12 @@ public class PayrollCalculationService {
 
         int expectedWorkingDays = (int) Math.round(scheduledWorkingDays);
         int workedDays = presentWorkingDates.size();
-        int totalLateMinutes = classifiedLateMinutesByDate.values().stream()
-                .filter(Objects::nonNull)
-                .mapToInt(Integer::intValue)
-                .sum();
         int presentPayableMinutes = classifiedPayableMinutesByDate.values().stream()
                 .filter(Objects::nonNull)
                 .mapToInt(Integer::intValue)
                 .sum();
         int absentMinutes = Math.max(0, eligibleScheduledMinutes - payableScheduledMinutes);
-        int absentDays = normalShiftMinutes > 0
-                ? (int) Math.ceil(absentMinutes / (double) normalShiftMinutes)
-                : 0;
+        int absentDays = lopDates.size();
         double payablePresentDays = normalShiftMinutes > 0
                 ? payableScheduledMinutes / (double) normalShiftMinutes
                 : 0.0;
@@ -293,10 +313,14 @@ public class PayrollCalculationService {
 
         double perMinuteSalary = scheduledWorkingMinutes > 0 ? salary / scheduledWorkingMinutes : 0.0;
         double perHourSalary = perMinuteSalary * 60.0;
-        int unpaidMissingMinutes = Math.max(0, absentMinutes - totalLateMinutes);
+        int unpaidMissingMinutes = Math.max(0, absentDays * normalShiftMinutes + permissionExcessMinutes);
         BigDecimal proratedBasic = moneyForMinutes(monthlySalary, eligibleScheduledMinutes, scheduledWorkingMinutes);
         BigDecimal lateAmount = moneyForMinutes(monthlySalary, totalLateMinutes, scheduledWorkingMinutes);
-        BigDecimal unpaidMissingAmount = moneyForMinutes(monthlySalary, unpaidMissingMinutes, scheduledWorkingMinutes);
+        BigDecimal absentDayAmount = baseDailySalary
+                .multiply(BigDecimal.valueOf(absentDays))
+                .setScale(2, RoundingMode.HALF_UP);
+        BigDecimal permissionExcessAmount = moneyForMinutes(monthlySalary, permissionExcessMinutes, scheduledWorkingMinutes);
+        BigDecimal unpaidMissingAmount = absentDayAmount.add(permissionExcessAmount).setScale(2, RoundingMode.HALF_UP);
         double netSalary = proratedBasic.subtract(unpaidMissingAmount).doubleValue();
         reconcileDailyAmounts(dailyRows, "dayEarnedAmount", proratedBasic);
         BigDecimal overtimeAmount = moneyForMinutes(monthlySalary, overtimeMinutes, scheduledWorkingMinutes);
@@ -356,7 +380,7 @@ public class PayrollCalculationService {
                 casualBalance,
                 clUtilizedDays,
                 approvedPermissionMinutes,
-                lateDates.size(),
+                chargeableLateDates.size(),
                 totalLateMinutes,
                 normalShiftMinutes,
                 scheduledWorkingMinutes,
@@ -368,7 +392,9 @@ public class PayrollCalculationService {
                 proratedBasic,
                 unpaidMissingAmount,
                 lateAmount,
-                unpaidMissingMinutes);
+                unpaidMissingMinutes,
+                permissionExcessMinutes,
+                permissionExcessAmount);
     }
 
     private Map<String, Object> normalizeCurrentOpenPunch(Map<String, Object> row, LocalDate date, LocalDate today) {
@@ -1339,9 +1365,11 @@ public class PayrollCalculationService {
             BigDecimal proratedBasic,
             BigDecimal attendanceDeduction,
             BigDecimal lateAmount,
-            int unpaidMissingMinutes) {
+            int unpaidMissingMinutes,
+            int permissionExcessMinutes,
+            BigDecimal permissionExcessAmount) {
         public static PayrollResult empty() {
-            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0);
+            return new PayrollResult(null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, List.of(), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0, BigDecimal.ZERO);
         }
     }
 }
