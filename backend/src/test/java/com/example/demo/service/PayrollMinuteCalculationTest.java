@@ -128,11 +128,25 @@ class PayrollMinuteCalculationTest {
         assertThat(result.proratedBasic()).isEqualByComparingTo("8640");
         assertThat(result.absentMinutes()).isZero();
     }
-    @Test void incompleteAndDuplicateAttendanceRequireReview() {
+    @Test void incompleteAttendanceBecomesPendingAndDuplicateAttendanceUsesBestRecord() {
         records.get(0).setTimeOut(null);
-        assertThatThrownBy(this::calculate).isInstanceOf(IllegalStateException.class).hasMessageContaining("review required");
-        records.get(0).setTimeOut(records.get(0).getTimeIn().plusHours(9)); records.add(records.get(0));
-        assertThatThrownBy(this::calculate).isInstanceOf(IllegalStateException.class).hasMessageContaining("duplicate");
+        var pendingResult = calculate();
+        Map<String, Object> pendingRow = pendingResult.dailyRows().get(0);
+        assertThat(pendingRow.get("displayStatus")).isEqualTo("Pending");
+        assertThat(pendingRow.get("payrollPending")).isEqualTo(true);
+        assertThat(pendingRow.get("payableMinutes")).isEqualTo(0);
+        assertThat(pendingRow.get("payrollRemark")).isEqualTo("Time Out pending");
+
+        records.get(0).setTimeOut(records.get(0).getTimeIn().plusHours(9));
+        AttendanceRecord duplicate = attendanceFor(LocalDate.of(2026, 8, 1), true);
+        duplicate.setId(999L);
+        duplicate.setTimeIn(duplicate.getTimeIn().plusMinutes(30));
+        records.add(duplicate);
+        var duplicateResult = calculate();
+        Map<String, Object> duplicateRow = duplicateResult.dailyRows().get(0);
+        assertThat(duplicateRow.get("id")).isEqualTo(999L);
+        assertThat(duplicateRow.get("payableMinutes")).isEqualTo(510);
+        assertThat(duplicateRow.get("lateMinutes")).isEqualTo(30);
     }
     @Test void currentDayOpenPunchIsPendingAndDoesNotBlockDailyPayroll() {
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
