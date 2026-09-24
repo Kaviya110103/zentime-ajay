@@ -122,6 +122,24 @@ public class EmployeeController {
         }
         employee.setCompanyCode(companyCode);
 
+        String requestedEmail = employee.getEmail() == null ? "" : employee.getEmail().trim().toLowerCase();
+        if (requestedEmail.isBlank()) {
+            return ResponseEntity.badRequest().body("Email is required");
+        }
+        if (employeeRepository.findFirstByEmailIgnoreCase(requestedEmail).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("Email already exists");
+        }
+        employee.setEmail(requestedEmail);
+
+        String requestedUsername = employee.getUsername() == null ? "" : employee.getUsername().trim();
+        if (requestedUsername.isBlank()) {
+            return ResponseEntity.badRequest().body("Username is required");
+        }
+        if (employeeRepository.findFirstByUsernameIgnoreCase(requestedUsername).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("Username already exists");
+        }
+        employee.setUsername(requestedUsername);
+
         if (employee.getEmployeeCode() != null && !employee.getEmployeeCode().isBlank()) {
             String normalizedCode = employee.getEmployeeCode().trim().toUpperCase();
             if (isEmployeeCodeForCompany(normalizedCode, companyCode)) {
@@ -200,8 +218,12 @@ public class EmployeeController {
         );
 
         emailDetails.setMessage(message);
-        String emailResponse = emailService.sendEmail(emailDetails);
-        logger.info(emailResponse);
+        try {
+            String emailResponse = emailService.sendEmail(emailDetails);
+            logger.info(emailResponse);
+        } catch (Exception mailEx) {
+            logger.warn("Employee credential email failed for employeeId={}: {}", createdEmployee.getId(), mailEx.getMessage());
+        }
 
         return ResponseEntity.ok(createdEmployee);
     }
@@ -1206,22 +1228,6 @@ public class EmployeeController {
             return;
         }
 
-        // Snapshot additional days before switching tenant context. This avoids
-        // accidental data loss when source and master resolve to the same managed entity.
-        List<EmployeeAdditionalWorkingDay> additionalDaysSnapshot = new ArrayList<>();
-        if (sourceEmployee.getAdditionalWorkingDays() != null) {
-            for (EmployeeAdditionalWorkingDay sourceDay : sourceEmployee.getAdditionalWorkingDays()) {
-                if (sourceDay == null) {
-                    continue;
-                }
-                EmployeeAdditionalWorkingDay copiedDay = new EmployeeAdditionalWorkingDay();
-                copiedDay.setDayType(sourceDay.getDayType());
-                copiedDay.setTimeIn(sourceDay.getTimeIn());
-                copiedDay.setTimeOut(sourceDay.getTimeOut());
-                additionalDaysSnapshot.add(copiedDay);
-            }
-        }
-
         String currentTenantDb = TenantContext.getTenantDb();
         try {
             TenantContext.clear();
@@ -1268,16 +1274,6 @@ public class EmployeeController {
             masterEmployee.setCompanyCode(sourceEmployee.getCompanyCode());
             masterEmployee.setEmployeeCode(sourceEmployee.getEmployeeCode());
             masterEmployee.setClientId(sourceEmployee.getClientId());
-
-            if (masterEmployee.getAdditionalWorkingDays() == null) {
-                masterEmployee.setAdditionalWorkingDays(new ArrayList<>());
-            } else {
-                masterEmployee.getAdditionalWorkingDays().clear();
-            }
-            for (EmployeeAdditionalWorkingDay copiedDay : additionalDaysSnapshot) {
-                copiedDay.setEmployee(masterEmployee);
-                masterEmployee.getAdditionalWorkingDays().add(copiedDay);
-            }
 
             employeeRepository.save(masterEmployee);
             logger.info("Mirrored profile to master for employeeId={}", masterEmployee.getId());

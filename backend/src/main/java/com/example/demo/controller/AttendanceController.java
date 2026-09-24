@@ -48,6 +48,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -480,10 +481,37 @@ public ResponseEntity<String> markTimeIn(
         schemaMaintenanceService.ensureEmployeeSchema();
 
         String dbDate = DateUtil.isoToDb(isoDate);          // 14/07/2025
-        return attendanceRecordRepository.findByEmployee_IdAndDate(employeeId, dbDate)
-                .map(AttendanceRecordDTO::fromEntity)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        List<AttendanceRecord> records = attendanceRecordRepository.findByEmployeeIdAndDate(employeeId, dbDate);
+        if (records == null || records.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        AttendanceRecord latestRecord = records.stream()
+                .max(Comparator
+                        .comparingInt(this::attendanceImagePriority)
+                        .thenComparing(AttendanceRecord::getId, Comparator.nullsLast(Long::compareTo)))
+                .orElse(records.get(records.size() - 1));
+        return ResponseEntity.ok(AttendanceRecordDTO.fromEntity(latestRecord));
+    }
+
+    private int attendanceImagePriority(AttendanceRecord record) {
+        if (record == null) {
+            return 0;
+        }
+        int priority = 0;
+        if (record.getImageIn() != null || record.getImageOut() != null) {
+            priority += 8;
+        }
+        if (record.getTimeIn() != null || record.getTimeOut() != null) {
+            priority += 4;
+        }
+        String status = record.getAttendanceStatus();
+        if (status != null && !"Absent".equalsIgnoreCase(status.trim())) {
+            priority += 2;
+        }
+        if (record.getId() != null) {
+            priority += 1;
+        }
+        return priority;
     }
 
     /* ---------- 2. Monthly list endpoint --------------------------------- */

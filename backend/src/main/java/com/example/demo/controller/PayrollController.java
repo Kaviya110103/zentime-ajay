@@ -317,54 +317,8 @@ public class PayrollController {
                 : request.message;
 
         try {
-            List<PayslipPdfService.AllowanceItem> allowanceItems = request.additionalAllowances == null
-                    ? List.of()
-                    : request.additionalAllowances.stream()
-                            .map(item -> new PayslipPdfService.AllowanceItem(
-                                    item.name == null ? "" : item.name,
-                                    parseDouble(item.amount)))
-                            .collect(Collectors.toList());
-
-            PayslipPdfService.PayslipData payslipData = new PayslipPdfService.PayslipData(
-                    request.companyName == null ? "ZenTime" : request.companyName,
-                    request.employeeId,
-                    request.employeeName,
-                    request.position,
-                    request.branch,
-                    request.mobile,
-                    request.email,
-                    request.month,
-                    request.year,
-                    parseInt(request.totalDays),
-                    parseInt(request.scheduledDays),
-                    parseInt(request.weekOffDays),
-                    request.holidaysSummary,
-                    parseInt(request.workedDays),
-                    parseInt(request.absentDays),
-                    parseDouble(request.expectedHours),
-                    parseDouble(request.payableHours),
-                    parseDouble(request.overtimeHours),
-                    parseDouble(request.missingHours),
-                    parseDouble(request.basicSalary),
-                    parseDouble(request.netSalary),
-                    parseDouble(request.convenience),
-                    parseDouble(request.otAmount),
-                    parseDouble(request.pfAmount),
-                    parseDouble(request.lopAmount),
-                    parseDouble(request.incentives),
-                    parseDouble(request.advance),
-                    parseDouble(request.others),
-                    parseDouble(request.allowancesTotal),
-                    allowanceItems
-            );
-
-            PayrollLogoStorageService.LogoData logoData =
-                    payrollLogoStorageService.getLogo(request.clientId).orElse(null);
-
-            byte[] pdfBytes = payslipPdfService.generatePdf(payslipData, logoData);
-            String monthLabel = request.month <= 0 ? "month" : String.valueOf(request.month);
-            String fileName = "Payslip-" + (request.employeeId == null ? "employee" : request.employeeId)
-                    + "-" + request.year + "-" + monthLabel + ".pdf";
+            byte[] pdfBytes = generatePayslipPdf(request);
+            String fileName = payslipFileName(request);
             String result = emailService.sendEmailWithAttachment(
                     sender,
                     request.receiver,
@@ -376,7 +330,27 @@ public class PayrollController {
             return ResponseEntity.ok(Map.of("message", result));
         } catch (Exception ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Failed to generate/send payslip"));
+                    .body(Map.of("error", ex.getMessage() == null || ex.getMessage().isBlank()
+                            ? "Failed to generate/send payslip"
+                            : ex.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/preview-payslip", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<?> previewPayslip(@RequestBody PayslipEmailRequest request) {
+        if (request == null || request.clientId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
+        }
+
+        try {
+            byte[] pdfBytes = generatePayslipPdf(request);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .header("Content-Disposition", "inline; filename=\"" + payslipFileName(request) + "\"")
+                    .body(pdfBytes);
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to generate payslip preview"));
         }
     }
 
@@ -435,6 +409,60 @@ public class PayrollController {
 
     private double parseDouble(Number number) {
         return number == null ? 0.0 : number.doubleValue();
+    }
+
+    private byte[] generatePayslipPdf(PayslipEmailRequest request) throws Exception {
+        List<PayslipPdfService.AllowanceItem> allowanceItems = request.additionalAllowances == null
+                ? List.of()
+                : request.additionalAllowances.stream()
+                        .map(item -> new PayslipPdfService.AllowanceItem(
+                                item.name == null ? "" : item.name,
+                                parseDouble(item.amount)))
+                        .collect(Collectors.toList());
+
+        PayslipPdfService.PayslipData payslipData = new PayslipPdfService.PayslipData(
+                request.companyName == null ? "ZenTime" : request.companyName,
+                request.employeeId,
+                request.employeeName,
+                request.position,
+                request.branch,
+                request.mobile,
+                request.email,
+                request.month,
+                request.year,
+                parseInt(request.totalDays),
+                parseInt(request.scheduledDays),
+                parseInt(request.weekOffDays),
+                request.holidaysSummary,
+                parseInt(request.workedDays),
+                parseInt(request.absentDays),
+                parseDouble(request.expectedHours),
+                parseDouble(request.payableHours),
+                parseDouble(request.overtimeHours),
+                parseDouble(request.missingHours),
+                parseDouble(request.basicSalary),
+                parseDouble(request.netSalary),
+                parseDouble(request.convenience),
+                parseDouble(request.otAmount),
+                parseDouble(request.pfAmount),
+                parseDouble(request.lopAmount),
+                parseDouble(request.incentives),
+                parseDouble(request.advance),
+                parseDouble(request.others),
+                parseDouble(request.allowancesTotal),
+                allowanceItems
+        );
+
+        PayrollLogoStorageService.LogoData logoData =
+                payrollLogoStorageService.getLogo(request.clientId).orElse(null);
+
+        return payslipPdfService.generatePdf(payslipData, logoData);
+    }
+
+    private String payslipFileName(PayslipEmailRequest request) {
+        String monthLabel = request.month <= 0 ? "month" : String.valueOf(request.month);
+        return "Payslip-" + (request.employeeId == null ? "employee" : request.employeeId)
+                + "-" + request.year + "-" + monthLabel + ".pdf";
     }
 
     public static class AllowanceRequest {

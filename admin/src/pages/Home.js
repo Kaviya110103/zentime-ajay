@@ -247,6 +247,22 @@ export default function Home() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("admin-dashboard-detail", {
+        detail: { open: selectedIndex !== null },
+      })
+    );
+
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent("admin-dashboard-detail", {
+          detail: { open: false },
+        })
+      );
+    };
+  }, [selectedIndex]);
+
   const canNavigateToAddEmployee = async () => {
     if (!client?.id) {
       return true;

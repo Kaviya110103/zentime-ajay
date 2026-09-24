@@ -18,6 +18,7 @@ import HolidayCalendar from './pages/HolidayCalendar';
 import OvertimeRequests from './pages/OvertimeRequests';
 import WeekoffRequests from './pages/WeekoffRequests';
 import AttendanceSupportRequests from './pages/AttendanceSupportRequests';
+import AdminLayout from './component/AdminLayout';
 
 const INACTIVITY_MS = 5 * 60 * 1000;
 const LAST_ACTIVITY_KEY = 'adminLastActivity';
@@ -84,6 +85,12 @@ function SessionInactivityGuard() {
 }
 
 function App() {
+  const protectedPage = (children) => (
+    <ProtectedRoute>
+      <AdminLayout>{children}</AdminLayout>
+    </ProtectedRoute>
+  );
+
   return (
     <Router>
       <SessionInactivityGuard />
@@ -92,71 +99,71 @@ function App() {
           <Route path="/" element={<LoginPage />} />
 
           <Route path="AdminDashboard" element={
-            <ProtectedRoute><Home /></ProtectedRoute>
+            protectedPage(<Home />)
           } />
 
           <Route path="ontime" element={
-            <ProtectedRoute><OnTime /></ProtectedRoute>
+            protectedPage(<OnTime />)
           } />
 
           <Route path="LateArrival" element={
-            <ProtectedRoute><LateArrival /></ProtectedRoute>
+            protectedPage(<LateArrival />)
           } />
 
           <Route path="add-employee" element={
-            <ProtectedRoute><AddEmployee /></ProtectedRoute>
+            protectedPage(<AddEmployee />)
           } />
 
           <Route path="add-employee/:id" element={
-            <ProtectedRoute><AddEmployee /></ProtectedRoute>
+            protectedPage(<AddEmployee />)
           } />
 
           <Route path="leaveadmin" element={
-            <ProtectedRoute><LeaveAdmin /></ProtectedRoute>
+            protectedPage(<LeaveAdmin />)
           } />
 
           <Route path="Attendancerecords" element={
-            <ProtectedRoute><AttendanaceRecords /></ProtectedRoute>
+            protectedPage(<AttendanaceRecords />)
           } />
 
           <Route path="Announcements" element={
-            <ProtectedRoute><Announcements /></ProtectedRoute>
+            protectedPage(<Announcements />)
           } />
 
           <Route path="MissedTimes" element={
-            <ProtectedRoute><Missedtimes /></ProtectedRoute>
+            protectedPage(<Missedtimes />)
           } />
 
           <Route path="Payroll" element={
-            <ProtectedRoute><Payroll /></ProtectedRoute>
+            protectedPage(<Payroll />)
           } />
 
           <Route path="Notifications" element={
-            <ProtectedRoute><Notifications /></ProtectedRoute>
+            protectedPage(<Notifications />)
           } />
 
           <Route path="LocationSet" element={
-            <ProtectedRoute><LocationSet /></ProtectedRoute>
+            protectedPage(<LocationSet />)
           } />
 
           <Route path="LocationRequests" element={
-            <ProtectedRoute><LocationRequests /></ProtectedRoute>
+            protectedPage(<LocationRequests />)
           } />
 
           <Route path="HolidayCalendar" element={
-            <ProtectedRoute><HolidayCalendar /></ProtectedRoute>
+            protectedPage(<HolidayCalendar />)
           } />
 
           <Route path="OvertimeRequests" element={
-            <ProtectedRoute><OvertimeRequests /></ProtectedRoute>
+            protectedPage(<OvertimeRequests />)
           } />
 
           <Route path="WeekoffRequests" element={
-            <ProtectedRoute><WeekoffRequests /></ProtectedRoute>
+            protectedPage(<WeekoffRequests />)
           } />
 
           <Route path="AttendanceSupportRequests" element={
-            <ProtectedRoute><AttendanceSupportRequests /></ProtectedRoute>
+            protectedPage(<AttendanceSupportRequests />)
           } />
         </Routes>
       </div>

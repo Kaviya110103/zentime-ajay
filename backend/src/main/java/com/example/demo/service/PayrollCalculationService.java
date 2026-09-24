@@ -96,9 +96,9 @@ public class PayrollCalculationService {
         Map<LocalDate, Map<String, Object>> actualByDate = new HashMap<>();
         for (Map<String, Object> row : classifiedRecords) {
             LocalDate date = parseDbDate(String.valueOf(row.get("date")));
-            row = normalizeCurrentOpenPunch(row, date, today);
-            if (actualByDate.putIfAbsent(date, row) != null) {
-                throw new IllegalStateException("Payroll review required: duplicate attendance date " + date);
+            row = normalizeOpenPunch(row);
+            if (date != null) {
+                actualByDate.merge(date, row, this::selectPayrollRecordForDate);
             }
         }
 
@@ -170,12 +170,12 @@ public class PayrollCalculationService {
         Map<LocalDate, Integer> classifiedWorkedMinutesByDate = new HashMap<>();
         Map<LocalDate, Integer> classifiedLateMinutesByDate = new HashMap<>();
         Map<LocalDate, Integer> classifiedPayableMinutesByDate = new HashMap<>();
-        for (Map<String, Object> row : classifiedRecords) {
+        for (Map<String, Object> row : actualByDate.values()) {
             LocalDate date = parseDbDate(String.valueOf(row.getOrDefault("date", "")));
             if (date == null) {
                 continue;
             }
-            row = normalizeCurrentOpenPunch(row, date, today);
+            row = normalizeOpenPunch(row);
             if (joiningDate != null && date.isBefore(joiningDate)) continue;
             String countStatus = String.valueOf(row.getOrDefault("countStatus", ""));
             int workedMinutes = Math.max(0, objectInt(row.get("workedMinutes")));
@@ -397,11 +397,13 @@ public class PayrollCalculationService {
                 permissionExcessAmount);
     }
 
-    private Map<String, Object> normalizeCurrentOpenPunch(Map<String, Object> row, LocalDate date, LocalDate today) {
-        if (row == null || date == null || today == null || !date.equals(today)) {
+    private Map<String, Object> normalizeOpenPunch(Map<String, Object> row) {
+        if (row == null) {
             return row;
         }
-        if (!objectBoolean(row.get("reviewRequired")) || !hasValue(row.get("timeIn")) || hasValue(row.get("timeOut"))) {
+        String reviewReason = String.valueOf(row.getOrDefault("reviewReason", ""));
+        boolean incompletePunch = reviewReason.equalsIgnoreCase("Incomplete or invalid punches");
+        if (!objectBoolean(row.get("reviewRequired")) || !incompletePunch) {
             return row;
         }
         Map<String, Object> pending = new LinkedHashMap<>(row);
@@ -421,8 +423,32 @@ public class PayrollCalculationService {
         pending.put("reviewRequired", false);
         pending.put("reviewReason", null);
         pending.put("payrollPending", true);
-        pending.put("payrollPendingReason", "Time Out pending");
+        pending.put("payrollPendingReason", hasValue(row.get("timeIn")) && !hasValue(row.get("timeOut"))
+                ? "Time Out pending"
+                : "Incomplete or invalid punches");
         return pending;
+    }
+
+    private Map<String, Object> selectPayrollRecordForDate(Map<String, Object> existing, Map<String, Object> candidate) {
+        if (existing == null) {
+            return candidate;
+        }
+        if (candidate == null) {
+            return existing;
+        }
+        return payrollRecordScore(candidate) >= payrollRecordScore(existing) ? candidate : existing;
+    }
+
+    private int payrollRecordScore(Map<String, Object> row) {
+        int score = 0;
+        if (!objectBoolean(row.get("reviewRequired"))) score += 1000;
+        if (hasValue(row.get("timeIn")) && hasValue(row.get("timeOut"))) score += 500;
+        if (objectBoolean(row.get("payrollPending"))) score -= 250;
+        if ("Present".equalsIgnoreCase(String.valueOf(row.getOrDefault("countStatus", "")))) score += 100;
+        score += Math.min(240, Math.max(0, objectInt(row.get("payableMinutes"))));
+        score += Math.min(120, Math.max(0, objectInt(row.get("workedMinutes"))));
+        score += Math.min(50, Math.max(0, objectInt(row.get("id"))));
+        return score;
     }
 
     private String buildPayrollRemark(Map<String, Object> day, boolean paidLeave, int payable, int scheduledMinutes,
