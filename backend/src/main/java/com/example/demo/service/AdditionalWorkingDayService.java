@@ -30,25 +30,42 @@ public class AdditionalWorkingDayService {
             return List.of();
         }
 
-        repository.deleteByEmployee_Id(employee.getId());
-        repository.flush();
-        if (employee.getAdditionalWorkingDays() == null) {
-            employee.setAdditionalWorkingDays(new ArrayList<>());
-        } else {
-            employee.getAdditionalWorkingDays().clear();
+        List<AdditionalWorkingDayInput> normalizedInputs = normalizeInputs(inputs);
+        Map<AdditionalWorkingDayType, AdditionalWorkingDayInput> inputByType = new EnumMap<>(AdditionalWorkingDayType.class);
+        for (AdditionalWorkingDayInput input : normalizedInputs) {
+            inputByType.put(input.dayType(), input);
+        }
+
+        List<EmployeeAdditionalWorkingDay> existingRows = repository.findByEmployee_IdOrderByIdDesc(employee.getId());
+        Map<AdditionalWorkingDayType, EmployeeAdditionalWorkingDay> latestByType = new EnumMap<>(AdditionalWorkingDayType.class);
+        List<EmployeeAdditionalWorkingDay> rowsToDelete = new ArrayList<>();
+        for (EmployeeAdditionalWorkingDay row : existingRows) {
+            if (row == null || row.getDayType() == null) {
+                continue;
+            }
+            EmployeeAdditionalWorkingDay current = latestByType.putIfAbsent(row.getDayType(), row);
+            if (current != null || !inputByType.containsKey(row.getDayType())) {
+                rowsToDelete.add(row);
+            }
+        }
+        if (!rowsToDelete.isEmpty()) {
+            repository.deleteAllInBatch(rowsToDelete);
         }
 
         List<EmployeeAdditionalWorkingDay> savedRows = new ArrayList<>();
-        for (AdditionalWorkingDayInput input : normalizeInputs(inputs)) {
-            EmployeeAdditionalWorkingDay row = new EmployeeAdditionalWorkingDay();
+        for (AdditionalWorkingDayInput input : normalizedInputs) {
+            EmployeeAdditionalWorkingDay row = latestByType.get(input.dayType());
+            if (row == null || rowsToDelete.contains(row)) {
+                row = new EmployeeAdditionalWorkingDay();
+            }
             row.setEmployee(employee);
             row.setDayType(input.dayType());
             row.setTimeIn(input.timeIn());
             row.setTimeOut(input.timeOut());
             EmployeeAdditionalWorkingDay saved = repository.save(row);
-            employee.getAdditionalWorkingDays().add(saved);
             savedRows.add(saved);
         }
+        repository.flush();
         return savedRows;
     }
 

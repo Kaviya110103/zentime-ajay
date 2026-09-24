@@ -40,12 +40,15 @@ public class OvertimeRequestController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Integer month,
             @RequestParam(required = false) Integer year,
-            @RequestParam(required = false) String branch) {
+            @RequestParam(required = false) String branch,
+            @RequestParam(required = false) Long employeeId) {
         schemaMaintenanceService.ensureEmployeeSchema();
         OvertimeRequestStatus parsedStatus = parseStatus(status);
         List<OvertimeRequest> requests = overtimeRequestRepository
                 .findFilteredRequests(clientId, parsedStatus, requestFilterService.normalizeBranch(branch))
                 .stream()
+                .filter(request -> employeeId == null
+                        || (request.getEmployee() != null && employeeId.equals(request.getEmployee().getId())))
                 .filter(request -> requestFilterService.matchesMonth(request.getDate(), month, year))
                 .toList();
 
