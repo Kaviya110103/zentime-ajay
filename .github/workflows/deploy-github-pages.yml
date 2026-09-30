@@ -1,0 +1,85 @@
+name: Deploy Admin Frontends to GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - qa-testing
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and Deploy Frontends
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REACT_APP_API_BASE_URL: https://iie.zentime.co.in
+      PUBLIC_URL: /zentime-ajay/admin
+      CI: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Install admin dependencies
+        working-directory: admin
+        run: npm ci
+
+      - name: Build admin frontend
+        working-directory: admin
+        run: npm run build
+
+      - name: Prepare GitHub Pages package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf pages-dist
+          mkdir -p pages-dist/admin pages-dist/super-admin
+          cp -R admin/build/. pages-dist/admin/
+          cp admin/build/index.html pages-dist/admin/404.html
+          cp -R super-admin/. pages-dist/super-admin/
+          cat > pages-dist/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>ZenTime Temporary Frontend</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 40px; background: #f6f8fb; color: #172033; }
+                main { max-width: 560px; margin: 0 auto; background: white; padding: 28px; border-radius: 12px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.10); }
+                a { display: block; padding: 14px 16px; margin: 12px 0; border-radius: 8px; background: #0b65d8; color: white; text-decoration: none; font-weight: 700; }
+                a.secondary { background: #16233d; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>ZenTime Temporary Frontend</h1>
+                <a href="./admin/">Open Admin</a>
+                <a class="secondary" href="./super-admin/">Open Super Admin</a>
+              </main>
+            </body>
+          </html>
+          HTML
+          touch pages-dist/.nojekyll
+
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./pages-dist
+          publish_branch: gh-pages
+          force_orphan: true
