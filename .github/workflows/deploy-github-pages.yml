@@ -48,6 +48,7 @@ jobs:
           rm -rf pages-dist
           cp -R admin/build/. pages-dist/
           cp admin/build/index.html pages-dist/404.html
+          echo "iieadmin.zentime.co.in" > pages-dist/CNAME
           touch pages-dist/.nojekyll
 
       - name: Deploy to gh-pages branch
