@@ -92,7 +92,7 @@ function App() {
   );
 
   return (
-    <Router>
+    <Router basename={process.env.PUBLIC_URL || '/'}>
       <SessionInactivityGuard />
       <div className="admin-app-shell">
         <Routes>
