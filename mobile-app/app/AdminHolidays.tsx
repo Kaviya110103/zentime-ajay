@@ -20,6 +20,7 @@ import { adminRequest, fetchAdminBranches } from '../lib/adminApi';
 
 type HolidayForm = {
   holidayDate: string;
+  holidayEndDate: string;
   holidayName: string;
   holidayType: 'FULL' | 'HALF';
   branchScope: string;
@@ -27,6 +28,7 @@ type HolidayForm = {
 
 const emptyForm: HolidayForm = {
   holidayDate: '',
+  holidayEndDate: '',
   holidayName: '',
   holidayType: 'FULL',
   branchScope: 'ALL',
@@ -87,6 +89,7 @@ export default function AdminHolidays() {
   const [success, setSuccess] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [endDatePickerVisible, setEndDatePickerVisible] = useState(false);
   const [editingHoliday, setEditingHoliday] = useState<any | null>(null);
   const [form, setForm] = useState<HolidayForm>(emptyForm);
 
@@ -143,6 +146,7 @@ export default function AdminHolidays() {
   const resetModal = () => {
     setModalVisible(false);
     setDatePickerVisible(false);
+    setEndDatePickerVisible(false);
     setEditingHoliday(null);
     setForm(emptyForm);
   };
@@ -166,6 +170,7 @@ export default function AdminHolidays() {
     setEditingHoliday(holiday);
     setForm({
       holidayDate: String(holiday?.holidayDate || ''),
+      holidayEndDate: String(holiday?.holidayEndDate || holiday?.holidayDate || ''),
       holidayName: String(holiday?.holidayName || ''),
       holidayType: String(holiday?.holidayType || 'FULL').toUpperCase() === 'HALF' ? 'HALF' : 'FULL',
       branchScope: String(holiday?.branchScope || 'ALL'),
@@ -176,17 +181,24 @@ export default function AdminHolidays() {
   const buildPayload = () => ({
     clientId: adminSession?.id,
     holidayDate: form.holidayDate.trim(),
+    holidayEndDate: form.holidayEndDate.trim(),
     holidayName: form.holidayName.trim(),
     holidayType: form.holidayType,
     branchScope: form.branchScope || 'ALL',
   });
 
   const validateForm = () => {
-    if (!form.holidayDate.trim() || !form.holidayName.trim()) {
-      return 'Holiday name is required.';
+    if (!form.holidayDate.trim() || !form.holidayEndDate.trim() || !form.holidayName.trim()) {
+      return 'From date, to date, and holiday name are required.';
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(form.holidayDate.trim())) {
-      return 'Holiday date must be in yyyy-MM-dd format.';
+      return 'From date must be in yyyy-MM-dd format.';
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.holidayEndDate.trim())) {
+      return 'To date must be in yyyy-MM-dd format.';
+    }
+    if (form.holidayEndDate < form.holidayDate) {
+      return 'To date must be on or after the from date.';
     }
     return '';
   };
@@ -268,8 +280,8 @@ export default function AdminHolidays() {
         {sortedHolidays.map((holiday, index) => (
           <View key={`${holiday?.id || holiday?.holidayDate || index}`} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.name, { color: colors.text }]}>{holiday?.holidayName || 'Holiday'}</Text>
-            <Text style={[styles.meta, { color: colors.mutedText }]}>Start Date: {holiday?.holidayDate || '-'}</Text>
-            <Text style={[styles.meta, { color: colors.mutedText }]}>End Date: {holiday?.holidayDate || '-'}</Text>
+            <Text style={[styles.meta, { color: colors.mutedText }]}>From: {holiday?.holidayDate || '-'}</Text>
+            <Text style={[styles.meta, { color: colors.mutedText }]}>To: {holiday?.holidayEndDate || holiday?.holidayDate || '-'}</Text>
             <Text style={[styles.meta, { color: colors.mutedText }]}>Type: {holiday?.holidayType || 'FULL'}</Text>
             <Text style={[styles.meta, { color: colors.mutedText }]}>Branch: {holiday?.branchScope && holiday.branchScope !== 'ALL' ? holiday.branchScope : 'All Branches'}</Text>
             <View style={styles.actions}>
@@ -292,7 +304,7 @@ export default function AdminHolidays() {
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>{editingHoliday ? 'Edit Holiday' : 'Add Holiday'}</Text>
-            <Text style={[styles.label, { color: colors.mutedText }]}>Holiday Date</Text>
+            <Text style={[styles.label, { color: colors.mutedText }]}>From Date</Text>
             <TouchableOpacity
               onPress={() => setDatePickerVisible(true)}
               style={[styles.dateButton, { borderColor: colors.border }]}
@@ -309,7 +321,37 @@ export default function AdminHolidays() {
                 onChange={(_event, selectedDate) => {
                   if (Platform.OS !== 'ios') setDatePickerVisible(false);
                   if (selectedDate) {
-                    setForm((prev) => ({ ...prev, holidayDate: formatIsoDate(selectedDate) }));
+                    const holidayDate = formatIsoDate(selectedDate);
+                    setForm((prev) => ({
+                      ...prev,
+                      holidayDate,
+                      holidayEndDate: !prev.holidayEndDate || prev.holidayEndDate < holidayDate
+                        ? holidayDate
+                        : prev.holidayEndDate,
+                    }));
+                  }
+                }}
+              />
+            ) : null}
+            <Text style={[styles.label, { color: colors.mutedText }]}>To Date</Text>
+            <TouchableOpacity
+              onPress={() => setEndDatePickerVisible(true)}
+              style={[styles.dateButton, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.dateButtonText, { color: form.holidayEndDate ? colors.text : colors.mutedText }]}>
+                {formatDisplayDate(form.holidayEndDate)}
+              </Text>
+            </TouchableOpacity>
+            {endDatePickerVisible ? (
+              <DateTimePicker
+                mode="date"
+                minimumDate={parseIsoDate(form.holidayDate)}
+                value={parseIsoDate(form.holidayEndDate || form.holidayDate)}
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(_event, selectedDate) => {
+                  if (Platform.OS !== 'ios') setEndDatePickerVisible(false);
+                  if (selectedDate) {
+                    setForm((prev) => ({ ...prev, holidayEndDate: formatIsoDate(selectedDate) }));
                   }
                 }}
               />

@@ -39,4 +39,15 @@ public class EmployeeHolidayController {
             return ResponseEntity.badRequest().body(ex.getMessage());
         }
     }
+
+    @GetMapping("/upcoming/{employeeId}")
+    public ResponseEntity<?> getUpcomingHolidays(
+            @PathVariable Long employeeId,
+            @RequestParam(value = "clientId", required = false) Long clientId) {
+        try {
+            return ResponseEntity.ok(holidayService.getUpcomingHolidaysForEmployee(employeeId, clientId));
+        } catch (NoSuchElementException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ex.getMessage());
+        }
+    }
 }

@@ -158,6 +158,9 @@ public void setGuestStartDate(LocalDateTime guestStartDate) {
 @Column(name = "client_id", nullable = false)
     private Long clientId;
 
+    @Column(name = "employment_status", nullable = false)
+    private String employmentStatus = "ACTIVE";
+
 
 @Column(name = "guest_start_date")
 private LocalDateTime guestStartDate;
@@ -192,6 +195,14 @@ private LocalDateTime guestStartDate;
 
     public void setClientId(Long clientId) {
         this.clientId = clientId;
+    }
+
+    public String getEmploymentStatus() {
+        return employmentStatus;
+    }
+
+    public void setEmploymentStatus(String employmentStatus) {
+        this.employmentStatus = employmentStatus;
     }
 
 

@@ -27,6 +27,7 @@ import com.example.demo.MODELS.Client;
 import com.example.demo.MODELS.EmailDetails;
 import com.example.demo.service.ClientService;
 import com.example.demo.service.EmailService;
+import com.example.demo.service.PushNotificationService;
 
 import jakarta.validation.Valid;
 
@@ -38,13 +39,16 @@ public class ClientController {
     private final ClientService clientService;
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
+    private final PushNotificationService pushNotificationService;
 
     public ClientController(ClientService clientService,
                             PasswordEncoder passwordEncoder,
-                            EmailService emailService) {
+                            EmailService emailService,
+                            PushNotificationService pushNotificationService) {
         this.clientService = clientService;
         this.passwordEncoder = passwordEncoder;
         this.emailService = emailService;
+        this.pushNotificationService = pushNotificationService;
     }
 
     public static class ClientLoginRequest {
@@ -292,6 +296,21 @@ public class ClientController {
             response.put("message", "Client not found");
             return ResponseEntity.status(404).body(response);
         }
+    }
+
+    @PostMapping(path = "/{id:\\d+}/push-token", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> registerAdminPushToken(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> payload) {
+        String token = payload == null ? null : payload.get("token");
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("message", "token is required"));
+        }
+        if (clientService.getById(id).isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("message", "Client not found"));
+        }
+        pushNotificationService.registerAdminToken(id, token);
+        return ResponseEntity.ok(Map.of("message", "Admin push token registered"));
     }
 
     @DeleteMapping("/{id:\\d+}")

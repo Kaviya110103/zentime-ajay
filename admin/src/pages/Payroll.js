@@ -962,9 +962,12 @@ function EmployeePayrollViewer() {
 
         const nextSet = new Set();
         payload.forEach((holiday) => {
-          const parsedDate = parseRecordDate(holiday?.holidayDate);
-          const dateKey = parsedDate ? format(parsedDate, "yyyy-MM-dd") : null;
-          if (dateKey) nextSet.add(dateKey);
+          const startDate = parseRecordDate(holiday?.holidayDate);
+          const endDate = parseRecordDate(holiday?.holidayEndDate) || startDate;
+          if (!startDate || !endDate) return;
+          for (let cursor = new Date(startDate); cursor <= endDate; cursor.setDate(cursor.getDate() + 1)) {
+            nextSet.add(format(cursor, "yyyy-MM-dd"));
+          }
         });
         setHolidayDateSet(nextSet);
       } catch (err) {

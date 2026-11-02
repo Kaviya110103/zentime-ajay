@@ -126,11 +126,21 @@ public class AttendanceClassificationService {
             LocalDate start = dates.stream().min(Comparator.naturalOrder()).orElse(null);
             LocalDate end = dates.stream().max(Comparator.naturalOrder()).orElse(null);
             if (start != null && end != null) {
-                holidaysByDate = holidayRepository
-                        .findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(clientId, start, end)
+                Map<LocalDate, List<Holiday>> resolvedHolidaysByDate = new LinkedHashMap<>();
+                holidayRepository.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(clientId, end)
                         .stream()
                         .filter(holiday -> holiday.getHolidayDate() != null)
-                        .collect(Collectors.groupingBy(Holiday::getHolidayDate));
+                        .forEach(holiday -> {
+                            LocalDate holidayEndDate = holiday.getHolidayEndDate() == null
+                                    ? holiday.getHolidayDate()
+                                    : holiday.getHolidayEndDate();
+                            for (LocalDate date = holiday.getHolidayDate(); !date.isAfter(holidayEndDate); date = date.plusDays(1)) {
+                                if (!date.isBefore(start) && !date.isAfter(end)) {
+                                    resolvedHolidaysByDate.computeIfAbsent(date, ignored -> new ArrayList<>()).add(holiday);
+                                }
+                            }
+                        });
+                holidaysByDate = resolvedHolidaysByDate;
             }
         }
 
@@ -196,6 +206,12 @@ public class AttendanceClassificationService {
         int earlyOutMinutes = minutes.early();
         Integer calculatedMissedMinutes = minutes.missed();
 
+        // A retained time-in is useful for auditing, but an explicitly forced LOP
+        // must still be treated as absent by reports and payroll.
+        boolean forcedLop = normalizedDayStatus.contains("lop")
+                || normalizedDayStatus.contains("loss of pay")
+                || normalizedStatus.contains("lop")
+                || normalizedStatus.contains("loss of pay");
         boolean markedPresent = normalizedStatus.contains("present")
                 || normalizedDayStatus.contains("present")
                 || hasPunch;
@@ -205,7 +221,9 @@ public class AttendanceClassificationService {
         boolean absent = normalizedStatus.contains("absent");
 
         String displayStatus;
-        if (markedPresent) {
+        if (forcedLop) {
+            displayStatus = "Absent";
+        } else if (markedPresent) {
             displayStatus = "Present";
         } else if (effectiveWeekOff) {
             displayStatus = "Week Off";
@@ -222,7 +240,9 @@ public class AttendanceClassificationService {
         }
 
         String countStatus;
-        if (markedPresent) {
+        if (forcedLop) {
+            countStatus = "Absent";
+        } else if (markedPresent) {
             countStatus = "Present";
         } else if (effectiveWeekOff) {
             countStatus = "Week Off";

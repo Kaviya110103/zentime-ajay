@@ -1,7 +1,8 @@
 import { MaterialIcons } from "@expo/vector-icons";
+import DateTimePicker from '@react-native-community/datetimepicker';
 import axios from "axios";
 import React, { useContext, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Modal, SafeAreaView, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { AppText as Text, AppTextInput as TextInput } from './AppTypography';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import LocationTest from '../app/LocationTest';
@@ -28,6 +29,10 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
   const [showTimeoutReasonModal, setShowTimeoutReasonModal] = useState(false);
   const [timeoutReason, setTimeoutReason] = useState('');
   const [missedTimeoutRecordId, setMissedTimeoutRecordId] = useState<number | null>(null);
+  const [missedTimeoutClockOut, setMissedTimeoutClockOut] = useState<Date | null>(null);
+  const [showMissedTimeoutTimePicker, setShowMissedTimeoutTimePicker] = useState(false);
+  const [missedTimeoutReminder, setMissedTimeoutReminder] = useState('');
+  const [missedTimeoutRemaining, setMissedTimeoutRemaining] = useState<number | null>(null);
   const [pendingLocation, setPendingLocation] = useState<string | null>(null);
   const [locationStatus, setLocationStatus] = useState<'Active' | 'Inactive' | 'Unknown'>('Unknown');
   const [currentCoords, setCurrentCoords] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -38,6 +43,21 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
   const companyCode = employee?.companyCode;
   const clientId = employee?.clientId;
 
+  const openMissedTimeoutForm = (data: any) => {
+    setMissedTimeoutRecordId(Number(data.recordId ?? data.missedTimeoutRecordId));
+    setMissedTimeoutReminder(data.message ?? data.reminder ?? 'Please submit your missed time-out details.');
+    setMissedTimeoutRemaining(typeof data.remainingChances === 'number' ? data.remainingChances : null);
+    setMissedTimeoutClockOut(null);
+    setShowTimeoutReasonModal(true);
+  };
+
+  const selectedClockOutTime = () => {
+    if (!missedTimeoutClockOut) return null;
+    const hours = String(missedTimeoutClockOut.getHours()).padStart(2, '0');
+    const minutes = String(missedTimeoutClockOut.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
   useEffect(() => {
     const fetchAttendanceStatus = async () => {
       try {
@@ -45,10 +65,7 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
           buildApiUrl(`/api/attendance/latest-today-or-yesterday/${employeeId}`, { clientId })
         );
         const data = res.data;
-        if (data?.found === false) {
-          return;
-        }
-        if (data?.date) {
+        if (data?.found !== false && data?.date) {
           const parsedDate = parse(data.date, 'dd/MM/yyyy', new Date());
           const today = isToday(parsedDate);
           if (today && data.attendanceStatus === 'Absent') {
@@ -58,6 +75,17 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
             // If day already started, notify parent
             onDone?.();
           }
+        }
+
+        const promptResponse = await axios.get(
+          buildApiUrl('/api/attendance/missed-timeout/prompt', { clientId }),
+          { params: withClientId({ employeeId }, clientId) }
+        );
+        const prompt = promptResponse.data;
+        if (prompt?.requiresSubmission) {
+          openMissedTimeoutForm(prompt);
+        } else if (prompt?.autoLopApplied) {
+          Alert.alert('Missed Time-Out Marked as LOP', prompt.message);
         }
       } catch (error: any) {
         if (error?.response?.status !== 404) {
@@ -128,8 +156,7 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
       const errorData = err?.response?.data;
       
       if (errorData?.missedTimeoutRecordId) {
-        setMissedTimeoutRecordId(errorData.missedTimeoutRecordId);
-        setShowTimeoutReasonModal(true);
+        openMissedTimeoutForm(errorData);
         setShowLocationModal(false);
         setPendingLocation(locationOverride ?? currentAddress);
       } else {
@@ -152,16 +179,22 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
       Alert.alert("Error", "Please enter a reason");
       return;
     }
+    if (!missedTimeoutClockOut) {
+      Alert.alert("Error", "Please select your actual clock-out time.");
+      return;
+    }
 
     setLoading(true);
     try {
-      await axios.post(
-        buildApiUrl(`/api/attendance/submit-timeout-reason`),
+      const response = await axios.post(
+        buildApiUrl(`/api/attendance/missed-timeout/submit`),
         null,
         {
           params: withClientId({
+            employeeId,
             recordId: missedTimeoutRecordId,
             reason: timeoutReason.trim(),
+            clockOutTime: selectedClockOutTime()!,
           }, clientId)
         }
       );
@@ -169,6 +202,9 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
       setShowTimeoutReasonModal(false);
       setTimeoutReason('');
       setMissedTimeoutRecordId(null);
+      setMissedTimeoutReminder('');
+      setMissedTimeoutRemaining(null);
+      Alert.alert('Time-Out Updated', response.data?.message ?? 'Your previous day time-out has been updated.');
       
       if (pendingLocation) {
         await handleStartDay(pendingLocation);
@@ -409,28 +445,66 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
             </View>
             
             <View style={styles.modalContent}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Timeout Reason Required</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Missed Time-Out</Text>
               <Text style={[styles.modalSubtitle, { color: colors.mutedText }]}>
-                Your previous work session timed out. Please provide a reason.
+                Why did you miss marking your time-out yesterday?
               </Text>
+              {!!missedTimeoutReminder && (
+                <View style={[styles.reminderBox, { backgroundColor: isDark ? '#3b2358' : '#F3E8FF' }]}>
+                  <MaterialIcons name="info-outline" size={20} color={isDark ? '#E9D5FF' : '#6B21A8'} />
+                  <Text style={[styles.reminderText, { color: isDark ? '#F3E8FF' : '#581C87' }]}>
+                    {missedTimeoutReminder}
+                  </Text>
+                </View>
+              )}
               
               <TextInput
                 style={[styles.reasonInput, { backgroundColor: isDark ? "#0f172a" : "#FFFFFF", borderColor: colors.border, color: colors.text }]}
                 placeholderTextColor={isDark ? "#94a3b8" : "#9CA3AF"}
                 multiline
                 numberOfLines={4}
-                placeholder="Enter reason..."
+                placeholder="Reason is required"
                 value={timeoutReason}
                 onChangeText={setTimeoutReason}
                 editable={!loading}
                 testID="attendance-timeout-reason"
                 accessibilityLabel="Timeout reason"
               />
+
+              <Text style={[styles.clockOutLabel, { color: colors.text }]}>Clock-Out Time *</Text>
+              <TouchableOpacity
+                style={[styles.clockOutPicker, { backgroundColor: isDark ? '#0f172a' : '#FFFFFF', borderColor: colors.border }]}
+                onPress={() => setShowMissedTimeoutTimePicker(true)}
+                disabled={loading}
+                testID="attendance-missed-timeout-clock-out"
+              >
+                <MaterialIcons name="access-time" size={21} color={colors.primary} />
+                <Text style={[styles.clockOutValue, { color: missedTimeoutClockOut ? colors.text : colors.mutedText }]}>
+                  {selectedClockOutTime() ?? 'Select actual clock-out time'}
+                </Text>
+              </TouchableOpacity>
+              {showMissedTimeoutTimePicker && (
+                <DateTimePicker
+                  value={missedTimeoutClockOut ?? new Date()}
+                  mode="time"
+                  is24Hour
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={(_, selectedTime) => {
+                    if (Platform.OS !== 'ios') setShowMissedTimeoutTimePicker(false);
+                    if (selectedTime) setMissedTimeoutClockOut(selectedTime);
+                  }}
+                />
+              )}
+              {Platform.OS === 'ios' && showMissedTimeoutTimePicker && (
+                <TouchableOpacity style={styles.timeDoneButton} onPress={() => setShowMissedTimeoutTimePicker(false)}>
+                  <Text style={styles.timeDoneButtonText}>Done</Text>
+                </TouchableOpacity>
+              )}
               
               <TouchableOpacity
-                style={[styles.confirmButton, (!timeoutReason.trim() || loading) && styles.disabledButton]}
+                style={[styles.confirmButton, (!timeoutReason.trim() || !missedTimeoutClockOut || loading) && styles.disabledButton]}
                 onPress={handleSubmitTimeoutReason}
-                disabled={!timeoutReason.trim() || loading}
+                disabled={!timeoutReason.trim() || !missedTimeoutClockOut || loading}
                 testID="attendance-timeout-reason-submit"
                 accessibilityLabel="Submit Reason"
                 accessibilityRole="button"
@@ -438,7 +512,7 @@ export default function StartDayComponent({ employeeId, onDone, onCancel }: Star
                 {loading ? (
                   <ActivityIndicator color="white" />
                 ) : (
-                  <Text style={styles.buttonText}>Submit Reason</Text>
+                  <Text style={styles.buttonText}>Submit Missed Time-Out</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -540,6 +614,49 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     textAlignVertical: 'top',
     backgroundColor: '#FFFFFF',
+  },
+  reminderBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  reminderText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  clockOutLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  clockOutPicker: {
+    height: 52,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  clockOutValue: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  timeDoneButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginBottom: 14,
+  },
+  timeDoneButtonText: {
+    color: '#351153',
+    fontSize: 15,
+    fontWeight: '700',
   },
   confirmButton: {
     backgroundColor: '#351153',

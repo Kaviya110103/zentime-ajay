@@ -28,6 +28,9 @@ public class Holiday {
     @Column(name = "holiday_date", nullable = false)
     private LocalDate holidayDate;
 
+    @Column(name = "holiday_end_date", nullable = false)
+    private LocalDate holidayEndDate;
+
     @Column(name = "holiday_name", nullable = false)
     private String holidayName;
 
@@ -55,6 +58,14 @@ public class Holiday {
 
     public void setHolidayDate(LocalDate holidayDate) {
         this.holidayDate = holidayDate;
+    }
+
+    public LocalDate getHolidayEndDate() {
+        return holidayEndDate == null ? holidayDate : holidayEndDate;
+    }
+
+    public void setHolidayEndDate(LocalDate holidayEndDate) {
+        this.holidayEndDate = holidayEndDate;
     }
 
     public String getHolidayName() {

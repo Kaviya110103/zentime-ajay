@@ -20,6 +20,7 @@ import {
   FaFilter,
   FaTrash, // Added delete icon
   FaEdit, // Optional: for future edit feature
+  FaArchive,
 } from "react-icons/fa";
 import {
   MdFace,
@@ -1063,6 +1064,7 @@ const EmployeeApp = () => {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [employeeToDelete, setEmployeeToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [archivingId, setArchivingId] = useState(null);
   const companyCode = String(client?.companyCode || "").trim().toLowerCase();
   const tenantOrigin = companyCode ? API_BASE_URL : "";
   const fallbackOrigin = API_BASE_URL;
@@ -1235,9 +1237,41 @@ const EmployeeApp = () => {
     navigate(`/add-employee/${employee.id}`);
   };
   const handleDeleteClick = (employee, e) => {
-    e.stopPropagation();
+    e?.stopPropagation();
     setEmployeeToDelete(employee);
     setDeleteModalOpen(true);
+  };
+
+  const archiveEmployee = async (employee, e) => {
+    e?.stopPropagation();
+    const employeeName = `${employee.firstName || ""} ${employee.lastName || ""}`.trim() || "this employee";
+    if (!window.confirm(`Archive ${employeeName}? Their historical attendance, payroll, and salary records will be retained.`)) {
+      return;
+    }
+
+    try {
+      setArchivingId(employee.id);
+      setError(null);
+      const response = await fetchWithTenantFallback(
+        `/api/employees/${employee.id}/archive?clientId=${client?.id}`,
+        { method: "PUT", headers: { "Content-Type": "application/json" } }
+      );
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to archive employee");
+      }
+
+      setEmployees((current) => current.filter((item) => item.id !== employee.id));
+      if (selectedEmployee?.id === employee.id) {
+        setSelectedEmployee(null);
+        setView("list");
+      }
+    } catch (err) {
+      console.error("Error archiving employee:", err);
+      setError(err.message || "Unable to archive employee");
+    } finally {
+      setArchivingId(null);
+    }
   };
 
   const deleteEmployee = async () => {
@@ -1372,6 +1406,15 @@ const EmployeeApp = () => {
                   <FaEdit size={14} />
                 </DeleteIconButton>
                 <DeleteIconButton
+                  onClick={(e) => archiveEmployee(item, e)}
+                  title="Archive Employee"
+                  aria-label="Archive Employee"
+                  style={{ backgroundColor: `${colors.warning}24`, color: "#9a6500" }}
+                  disabled={archivingId === item.id}
+                >
+                  <FaArchive size={14} />
+                </DeleteIconButton>
+                <DeleteIconButton
                   onClick={(e) => handleDeleteClick(item, e)}
                   title="Delete Employee"
                 >
@@ -1424,6 +1467,13 @@ const EmployeeApp = () => {
                   style={{ backgroundColor: `${colors.primary}15`, color: colors.primary }}
                 >
                   <FaEdit /> Edit Employee
+                </DeleteButton>
+                <DeleteButton
+                  onClick={() => archiveEmployee(employee)}
+                  disabled={archivingId === employee.id}
+                  style={{ backgroundColor: `${colors.warning}24`, color: "#9a6500" }}
+                >
+                  <FaArchive /> {archivingId === employee.id ? "Archiving..." : "Archive Employee"}
                 </DeleteButton>
                 <DeleteButton
                   onClick={() => {

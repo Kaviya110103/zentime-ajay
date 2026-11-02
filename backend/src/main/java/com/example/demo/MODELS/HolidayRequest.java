@@ -3,6 +3,7 @@ package com.example.demo.MODELS;
 public class HolidayRequest {
     private Long clientId;
     private String holidayDate;
+    private String holidayEndDate;
     private String holidayName;
     private String holidayType;
     private String branchScope;
@@ -21,6 +22,14 @@ public class HolidayRequest {
 
     public void setHolidayDate(String holidayDate) {
         this.holidayDate = holidayDate;
+    }
+
+    public String getHolidayEndDate() {
+        return holidayEndDate;
+    }
+
+    public void setHolidayEndDate(String holidayEndDate) {
+        this.holidayEndDate = holidayEndDate;
     }
 
     public String getHolidayName() {

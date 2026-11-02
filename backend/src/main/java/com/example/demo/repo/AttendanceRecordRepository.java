@@ -201,7 +201,7 @@ long countByAttendanceStatusAndTimeOutIsNullAndEmployee_ClientId(String attendan
 List<AttendanceRecord> findByAttendanceStatusAndTimeOutIsNullAndEmployee_ClientId(String attendanceStatus, Long clientId);
 List<AttendanceRecord> findByAttendanceStatusAndTimeOutIsNullAndEmployee_ClientIdOrderByIdDesc(String attendanceStatus, Long clientId, Pageable pageable);
 
-@Query("SELECT a.id, e.firstName, e.lastName, e.mobile, e.branch, e.position, a.date " +
+@Query("SELECT a.id, e.id, e.firstName, e.lastName, e.mobile, e.branch, e.position, a.date " +
        "FROM AttendanceRecord a JOIN a.employee e " +
        "WHERE a.attendanceStatus = :attendanceStatus AND a.timeOut IS NULL " +
        "AND (:clientId IS NULL OR e.clientId = :clientId) " +
@@ -225,7 +225,7 @@ List<Object[]> findTodayAbsentRows(
         @Param("clientId") Long clientId,
         @Param("branch") String branch);
 
-@Query("SELECT a.id, e.firstName, e.lastName, e.mobile, e.branch, e.position, a.date, a.TimoutReason, a.timeOut " +
+@Query("SELECT a.id, e.id, e.firstName, e.lastName, e.mobile, e.branch, e.position, a.date, a.TimoutReason, a.timeOut " +
        "FROM AttendanceRecord a JOIN a.employee e " +
        "WHERE a.attendanceStatus = :attendanceStatus " +
        "AND a.timeOut IS NOT NULL " +

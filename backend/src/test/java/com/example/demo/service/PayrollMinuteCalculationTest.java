@@ -16,6 +16,8 @@ class PayrollMinuteCalculationTest {
     private final AttendanceRecordRepository attendance = mock(AttendanceRecordRepository.class);
     private final LeavePermissionRepository leaves = mock(LeavePermissionRepository.class);
     private final OvertimeRequestRepository overtime = mock(OvertimeRequestRepository.class);
+    private final AdditionalWorkingDayService additionalWorkingDays = mock(AdditionalWorkingDayService.class);
+    private final HolidayRepository holidays = mock(HolidayRepository.class);
     private final List<AttendanceRecord> records = new ArrayList<>();
     private final List<LeavePermission> approvals = new ArrayList<>();
     private Employee employee;
@@ -27,14 +29,18 @@ class PayrollMinuteCalculationTest {
         employee.setFirstName("QA"); employee.setSalary(16740.0);
         employee.setShiftStartTime("10:00"); employee.setShiftEndTime("19:00");
         employee.setCasualLeaveBalance(1); employee.setPermissionHoursAllowed(1.0);
-        var additional = mock(AdditionalWorkingDayService.class);
-        var holidays = mock(HolidayRepository.class);
-        var classifier = new AttendanceClassificationService(additional, holidays, new ShiftResolverService(additional, holidays));
+        var classifier = new AttendanceClassificationService(
+                additionalWorkingDays,
+                holidays,
+                new ShiftResolverService(additionalWorkingDays, holidays));
         service = new PayrollCalculationService(employees, attendance, mock(AttendanceSupportRequestRepository.class),
                 leaves, holidays, mock(LeavePolicyRepository.class), mock(SchemaMaintenanceService.class), overtime, classifier);
         when(employees.findById(1L)).thenReturn(Optional.of(employee));
         when(attendance.findByEmployeeId(1L)).thenReturn(records);
         when(leaves.findByEmployeeIdAndStatus(1L, "approved")).thenReturn(approvals);
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any())).thenReturn(Map.of());
+        when(holidays.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(any(), any()))
+                .thenReturn(List.of());
         for (int d = 1; d <= 31; d++) {
             var record = new AttendanceRecord(); var date = LocalDate.of(2026, 8, d);
             record.setId((long) d); record.setEmployee(employee); record.setDate(date.format(DATE));
@@ -209,5 +215,60 @@ class PayrollMinuteCalculationTest {
         assertThat(result.scheduledWorkingMinutes()).isEqualTo(16590);
         assertThat(result.netSalary()).isEqualTo(16740);
         assertThat(result.dailyRows().get(0).get("calculatedMissedMinutes")).isEqualTo(0);
+    }
+
+    @Test void scheduledDaysStayConsistentForMondayWeekOffAndAllWeekendShiftOverrides() {
+        employee.setWeekOff("Monday");
+        employee.setLeavePolicyType("WEEKOFF");
+
+        List<EmployeeAdditionalWorkingDay> weekendShifts = List.of(
+                additionalWorkingDay(AdditionalWorkingDayType.ODD_SATURDAY, "10:00", "19:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.EVEN_SATURDAY, "10:00", "19:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.ODD_SUNDAY, "09:30", "14:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.EVEN_SUNDAY, "09:30", "14:00"));
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any()))
+                .thenReturn(Map.of(employee.getId(), weekendShifts));
+
+        PayrollCalculationService.PayrollResult result = calculate(10, 2026);
+
+        // October 2026 has four Mondays; every Saturday and Sunday is configured as a workday.
+        assertThat(result.scheduledWorkingDays()).isEqualTo(27);
+        assertThat(result.configuredWeekOffDays()).isEqualTo(4);
+    }
+
+    @Test void fullPublicHolidayIsExcludedFromScheduledDaysButRemainsPayable() {
+        employee.setWeekOff("Monday");
+        employee.setLeavePolicyType("WEEKOFF");
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any()))
+                .thenReturn(Map.of(employee.getId(), List.of(
+                        additionalWorkingDay(AdditionalWorkingDayType.ODD_SATURDAY, "10:00", "19:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.EVEN_SATURDAY, "10:00", "19:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.ODD_SUNDAY, "09:30", "14:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.EVEN_SUNDAY, "09:30", "14:00"))));
+        Holiday holiday = new Holiday();
+        holiday.setClientId(1L);
+        holiday.setHolidayDate(LocalDate.of(2026, 10, 2));
+        holiday.setHolidayName("Public Holiday");
+        holiday.setHolidayType("FULL");
+        holiday.setBranchScope("ALL");
+        when(holidays.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(any(), any()))
+                .thenReturn(List.of(holiday));
+
+        PayrollCalculationService.PayrollResult result = calculate(10, 2026);
+
+        assertThat(result.scheduledWorkingDays()).isEqualTo(26);
+        assertThat(result.publicHolidayDays()).isEqualTo(1.0);
+    }
+
+    private EmployeeAdditionalWorkingDay additionalWorkingDay(
+            AdditionalWorkingDayType dayType,
+            String timeIn,
+            String timeOut) {
+        EmployeeAdditionalWorkingDay day = new EmployeeAdditionalWorkingDay();
+        day.setEmployee(employee);
+        day.setDayType(dayType);
+        day.setTimeIn(timeIn);
+        day.setTimeOut(timeOut);
+        return day;
     }
 }

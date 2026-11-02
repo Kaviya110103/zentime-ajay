@@ -185,12 +185,22 @@ public class EmployeeService {
     // Get all employees
     public List<Employee> getAllEmployees() {
         schemaMaintenanceService.ensureEmployeeSchema();
-        return employeeRepository.findAll();
+        return employeeRepository.findByEmploymentStatusIgnoreCase("ACTIVE");
     }
 
     public List<Employee> getEmployeesByClientId(Long clientId) {
         schemaMaintenanceService.ensureEmployeeSchema();
-        return employeeRepository.findByClientId(clientId);
+        return employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE");
+    }
+
+    public List<Employee> getEmployeesByStatus(String status) {
+        schemaMaintenanceService.ensureEmployeeSchema();
+        return employeeRepository.findByEmploymentStatusIgnoreCase(status);
+    }
+
+    public List<Employee> getEmployeesByClientIdAndStatus(Long clientId, String status) {
+        schemaMaintenanceService.ensureEmployeeSchema();
+        return employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, status);
     }
 
     // Delete by ID

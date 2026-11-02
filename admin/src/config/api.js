@@ -6,11 +6,12 @@ const normalizeApiBaseUrl = (value) => {
   const isLocalBrowser =
     typeof window !== "undefined" &&
     ["localhost", "127.0.0.1"].includes(window.location.hostname);
-  if (isLocalBrowser) {
+  const configuredValue = String(value || "").trim();
+  if (isLocalBrowser && !configuredValue) {
     return "";
   }
   const fallback = isLocalBrowser ? "" : DEFAULT_API_BASE_URL;
-  const trimmed = String(value || fallback).trim().replace(/\/$/, "");
+  const trimmed = (configuredValue || fallback).replace(/\/$/, "");
   if (!trimmed) {
     return "";
   }
