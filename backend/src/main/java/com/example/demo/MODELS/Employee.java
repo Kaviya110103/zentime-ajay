@@ -158,7 +158,7 @@ public void setGuestStartDate(LocalDateTime guestStartDate) {
 @Column(name = "client_id", nullable = false)
     private Long clientId;
 
-    @Column(name = "employment_status", nullable = false)
+    @Column(name = "employment_status", nullable = false, columnDefinition = "VARCHAR(20) DEFAULT 'ACTIVE'")
     private String employmentStatus = "ACTIVE";
 
 

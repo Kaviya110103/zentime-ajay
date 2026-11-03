@@ -411,9 +411,10 @@ class BackendMySqlIntegrationTest {
         jdbcTemplate.update("""
                 INSERT INTO `%s`.employee (
                     id, first_name, last_name, username, password, email_id, client_id,
-                    branch, shift_start_time, shift_end_time, week_off, company_code, employee_code
+                    branch, shift_start_time, shift_end_time, week_off, company_code, employee_code,
+                    employment_status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.formatted(tenantDb),
                 id,
                 username,
@@ -427,7 +428,8 @@ class BackendMySqlIntegrationTest {
                 "18:00",
                 "Sunday",
                 clientId == 1L ? "iie" : "otherco",
-                employeeCode);
+                employeeCode,
+                "ACTIVE");
     }
 
     private Long insertAttendance(
