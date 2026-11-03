@@ -84,9 +84,21 @@ jobs:
               dumps = []
               for pattern in ("*.dump", "*.dumpstream"):
                   for dump in sorted(Path("target/surefire-reports").glob(pattern)):
-                      text = dump.read_text(errors="replace").strip().replace("\n", " ")
+                      text = dump.read_text(errors="replace").strip()
                       if text:
-                          dumps.append(f"{dump.name}: {text[:1200]}")
+                          blocks = text.split('\n"')
+                          relevant = next(
+                              (block for block in blocks[1:]
+                               if any(token in block for token in (
+                                   "SpringContextShutdownHook", "Testcontainers", "Ryuk",
+                                   "Hikari", "ApplicationShutdownHooks"))),
+                              blocks[-1],
+                          )
+                          thread_names = [line.split('"', 2)[1] for line in text.splitlines()
+                                          if line.startswith('"') and '"' in line]
+                          summary = relevant.replace("\n", " ")[:1000]
+                          dumps.append(
+                              f"{dump.name}: threads={thread_names[:20]}; shutdown detail={summary}")
               message = dumps[0] if dumps else "Maven failed before producing a JUnit failure report or Surefire JVM dump."
           print(f"::error title=Backend test failure::{message}")
           PY
