@@ -8,6 +8,7 @@ name: ZenTime QA CI
 
 permissions:
   contents: read
+  checks: write
 
 jobs:
   backend-tests:
@@ -39,6 +40,14 @@ jobs:
 
       - name: Run backend unit and integration tests
         run: ./mvnw -B test
+
+      - name: Publish backend test results
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Backend JUnit Results
+          path: backend/target/surefire-reports/TEST-*.xml
+          reporter: java-junit
 
   admin-build:
     name: Admin Build
