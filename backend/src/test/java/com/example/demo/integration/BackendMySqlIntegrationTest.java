@@ -22,15 +22,17 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -45,7 +47,7 @@ import com.example.demo.tenant.TenantContext;
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Testcontainers(disabledWithoutDocker = true)
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class BackendMySqlIntegrationTest {
 
     private static final DateTimeFormatter DB_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
@@ -76,6 +78,9 @@ class BackendMySqlIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private ConfigurableApplicationContext applicationContext;
+
     @BeforeEach
     void setUp() {
         TenantContext.clear();
@@ -94,6 +99,12 @@ class BackendMySqlIntegrationTest {
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+    }
+
+    @AfterAll
+    void closeApplicationContextBeforeContainerStops() {
+        TenantContext.clear();
+        applicationContext.close();
     }
 
     @Test

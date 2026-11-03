@@ -89,11 +89,17 @@ jobs:
                           blocks = text.split('\n"')
                           relevant = next(
                               (block for block in blocks[1:]
-                               if any(token in block for token in (
-                                   "SpringContextShutdownHook", "Testcontainers", "Ryuk",
-                                   "Hikari", "ApplicationShutdownHooks"))),
-                              blocks[-1],
+                               if "SpringApplicationShutdownHook" in block),
+                              None,
                           )
+                          if relevant is None:
+                              relevant = next(
+                                  (block for block in blocks[1:]
+                                   if any(token in block for token in (
+                                       "Testcontainers", "Ryuk", "Hikari",
+                                       "ApplicationShutdownHooks"))),
+                                  blocks[-1],
+                              )
                           thread_names = [line.split('"', 2)[1] for line in text.splitlines()
                                           if line.startswith('"') and '"' in line]
                           summary = relevant.replace("\n", " ")[:1000]
