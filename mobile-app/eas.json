@@ -21,7 +21,7 @@
         "EXPO_PUBLIC_API_BASE_URL": "https://iie.zentime.co.in"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "app-bundle"
       }
     }
   },

@@ -20,6 +20,7 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     Optional<Employee> findByUsernameIgnoreCaseAndIdNot(String username, Long id);
     Optional<Employee> findByEmployeeCode(String employeeCode);
     Optional<Employee> findByEmail(String email);
+    Optional<Employee> findFirstByEmailIgnoreCase(String email);
     Optional<Employee> findByEmailIgnoreCaseAndIdNot(String email, Long id);
     Optional<Employee> findByIdAndClientId(Long id, Long clientId);
 

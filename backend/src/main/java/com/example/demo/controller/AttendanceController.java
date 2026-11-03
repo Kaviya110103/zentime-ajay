@@ -48,6 +48,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -480,10 +481,37 @@ public ResponseEntity<String> markTimeIn(
         schemaMaintenanceService.ensureEmployeeSchema();
 
         String dbDate = DateUtil.isoToDb(isoDate);          // 14/07/2025
-        return attendanceRecordRepository.findByEmployee_IdAndDate(employeeId, dbDate)
-                .map(AttendanceRecordDTO::fromEntity)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        List<AttendanceRecord> records = attendanceRecordRepository.findByEmployeeIdAndDate(employeeId, dbDate);
+        if (records == null || records.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        AttendanceRecord latestRecord = records.stream()
+                .max(Comparator
+                        .comparingInt(this::attendanceImagePriority)
+                        .thenComparing(AttendanceRecord::getId, Comparator.nullsLast(Long::compareTo)))
+                .orElse(records.get(records.size() - 1));
+        return ResponseEntity.ok(AttendanceRecordDTO.fromEntity(latestRecord));
+    }
+
+    private int attendanceImagePriority(AttendanceRecord record) {
+        if (record == null) {
+            return 0;
+        }
+        int priority = 0;
+        if (record.getImageIn() != null || record.getImageOut() != null) {
+            priority += 8;
+        }
+        if (record.getTimeIn() != null || record.getTimeOut() != null) {
+            priority += 4;
+        }
+        String status = record.getAttendanceStatus();
+        if (status != null && !"Absent".equalsIgnoreCase(status.trim())) {
+            priority += 2;
+        }
+        if (record.getId() != null) {
+            priority += 1;
+        }
+        return priority;
     }
 
     /* ---------- 2. Monthly list endpoint --------------------------------- */
@@ -1255,23 +1283,27 @@ public Map<String, Object> getDashboardSummary(
         DashboardSummaryResult result = buildDashboardSummary(LocalDate.now(), clientId, normalizedBranch);
         DashboardDaySummary today = result.today();
         DashboardDaySummary yesterday = result.yesterday();
+        long presentToday = dashboardPresentPunchCount(result.summaryDate(), clientId, normalizedBranch, today.present());
+        long presentYesterday = dashboardPresentPunchCount(result.summaryDate().minusDays(1), clientId, normalizedBranch, yesterday.present());
 
         summary.put("totalEmployees", result.totalEmployees());
-        summary.put("presentToday", today.present());
-        summary.put("absentToday", Math.max(0L, result.totalEmployees() - today.present()));
+        summary.put("presentToday", presentToday);
+        summary.put("absentToday", Math.max(0L, result.totalEmployees() - presentToday));
         summary.put("lateArrivalsToday", today.late());
         summary.put("lateMinutesToday", today.lateMinutes());
-        summary.put("onTimeToday", today.onTime());
-        summary.put("presentYesterday", yesterday.present());
-        summary.put("absentYesterday", Math.max(0L, result.totalEmployees() - yesterday.present()));
+        summary.put("onTimeToday", Math.max(0L, presentToday - today.late()));
+        summary.put("presentYesterday", presentYesterday);
+        summary.put("absentYesterday", Math.max(0L, result.totalEmployees() - presentYesterday));
         summary.put("lateArrivalsYesterday", yesterday.late());
         summary.put("lateMinutesYesterday", yesterday.lateMinutes());
-        summary.put("onTimeYesterday", yesterday.onTime());
+        summary.put("onTimeYesterday", Math.max(0L, presentYesterday - yesterday.late()));
         summary.put("absentChangePercent", calculatePercentageChange(
-                Math.max(0L, result.totalEmployees() - yesterday.present()),
-                Math.max(0L, result.totalEmployees() - today.present())));
+                Math.max(0L, result.totalEmployees() - presentYesterday),
+                Math.max(0L, result.totalEmployees() - presentToday)));
         summary.put("lateChangePercent", calculatePercentageChange(yesterday.late(), today.late()));
-        summary.put("onTimeChangePercent", calculatePercentageChange(yesterday.onTime(), today.onTime()));
+        summary.put("onTimeChangePercent", calculatePercentageChange(
+                Math.max(0L, presentYesterday - yesterday.late()),
+                Math.max(0L, presentToday - today.late())));
         LOGGER.info(
                 "dashboard-summary-timing clientId={} branch={} summaryDate={} employees={} records={} syntheticRecords={} schemaMs={} employeeFetchMs={} attendanceFetchMs={} additionalWorkingFetchMs={} syntheticBuildMs={} classificationMs={} countMs={} totalMs={}",
                 clientId,
@@ -1312,6 +1344,25 @@ public Map<String, Object> getDashboardSummary(
         summary.put("onTimeChangePercent", 0.0);
         return summary;
     }
+}
+
+private long dashboardPresentPunchCount(LocalDate date, Long clientId, String normalizedBranch, long fallbackCount) {
+    if (date == null) {
+        return fallbackCount;
+    }
+    long total = 0L;
+    Pageable limit = PageRequest.of(0, 10_000);
+    for (String dateValue : dateCandidates(date)) {
+        List<Object[]> rows = normalizedBranch == null || normalizedBranch.isBlank()
+                ? attendanceRecordRepository.findTodayPresentTimeInRowsByDateAndClient(dateValue, clientId, limit)
+                : attendanceRecordRepository.findTodayPresentTimeInRowsByDateAndClientAndBranch(
+                        dateValue,
+                        clientId,
+                        normalizedBranch,
+                        limit);
+        total += rows.size();
+    }
+    return total > 0L ? total : fallbackCount;
 }
 
 private DashboardSummaryResult buildDashboardSummary(LocalDate todayDate, Long clientId, String normalizedBranch) {
@@ -1644,7 +1695,7 @@ private Map<String, Object> toAbsentPopupEmployee(Map<String, Object> classified
 
 private DashboardDaySummary incrementDashboardSummary(DashboardDaySummary current, Map<String, Object> row) {
     DashboardDaySummary base = current == null ? DashboardDaySummary.empty() : current;
-    String countStatus = String.valueOf(row.getOrDefault("countStatus", ""));
+    String countStatus = resolveDashboardCountStatus(row);
     int rowLateMinutes = intValue(row.get("lateMinutes"));
     if ("Present".equalsIgnoreCase(countStatus)) {
         long lateIncrement = rowLateMinutes > 0 ? 1L : 0L;
@@ -1664,6 +1715,16 @@ private DashboardDaySummary incrementDashboardSummary(DashboardDaySummary curren
                 Math.max(0L, base.present() - base.late()));
     }
     return base;
+}
+
+private String resolveDashboardCountStatus(Map<String, Object> row) {
+    String countStatus = String.valueOf(row.getOrDefault("countStatus", "")).trim();
+    String attendanceStatus = String.valueOf(row.getOrDefault("attendanceStatus", "")).trim();
+    Object timeIn = row.get("timeIn");
+    if ("Present".equalsIgnoreCase(attendanceStatus) && timeIn != null && !String.valueOf(timeIn).isBlank()) {
+        return "Present";
+    }
+    return countStatus;
 }
 
 private int intValue(Object value) {

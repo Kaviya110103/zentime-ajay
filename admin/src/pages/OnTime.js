@@ -192,9 +192,9 @@ const ModalOverlay = styled("div")(({ theme }) => ({
 const ModalContent = styled("div")(({ theme }) => ({
   backgroundColor: "white",
   borderRadius: 12,
-  maxWidth: "900px",
-  width: "100%",
-  maxHeight: "90vh",
+  maxWidth: "820px",
+  width: "min(92vw, 820px)",
+  maxHeight: "84vh",
   overflowY: "auto",
   boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
   position: "relative",
@@ -247,15 +247,29 @@ const CloseButton = styled("button")(({ theme }) => ({
 }));
 
 const ModalBody = styled("div")(({ theme }) => ({
-  padding: theme.spacing(3),
+  padding: theme.spacing(2),
+}));
+
+const ImageGrid = styled("div")(({ theme }) => ({
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: theme.spacing(2),
+  alignItems: "stretch",
+  [theme.breakpoints.down("md")]: {
+    gridTemplateColumns: "1fr",
+  },
 }));
 
 const ImageSection = styled("div")(({ theme }) => ({
-  marginBottom: theme.spacing(3),
+  marginBottom: theme.spacing(2),
   backgroundColor: "#F9FAFB",
   borderRadius: 8,
-  padding: theme.spacing(2),
+  padding: theme.spacing(1.5),
   border: "1px solid #E5E7EB",
+  minWidth: 0,
+  display: "grid",
+  gridTemplateRows: "auto auto 104px minmax(320px, 1fr)",
+  gap: theme.spacing(1.5),
 }));
 
 const ImageSectionTitle = styled("div")(({ theme }) => ({
@@ -270,11 +284,22 @@ const ImageSectionTitle = styled("div")(({ theme }) => ({
 
 const AttendanceImage = styled("img")(({ theme }) => ({
   width: "100%",
-  maxHeight: 400,
+  height: "100%",
+  maxHeight: "100%",
   borderRadius: 8,
-  objectFit: "cover",
+  objectFit: "contain",
+  display: "block",
+}));
+
+const ImageFrame = styled("div")(({ theme }) => ({
+  height: 320,
+  borderRadius: 8,
   backgroundColor: "#E5E7EB",
   border: "1px solid #D1D5DB",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  overflow: "hidden",
 }));
 
 const TimeInfo = styled("div")(({ theme }) => ({
@@ -302,10 +327,16 @@ const LocationCard = styled("div")(({ theme }) => ({
   border: "1px solid #90CAF9",
   borderRadius: 8,
   padding: theme.spacing(2),
-  marginBottom: theme.spacing(2),
   display: "flex",
   gap: theme.spacing(2),
-  alignItems: "flex-start",
+  alignItems: "center",
+  minHeight: 88,
+}));
+
+const LocationPlaceholder = styled("div")(({ theme }) => ({
+  minHeight: 88,
+  borderRadius: 8,
+  visibility: "hidden",
 }));
 
 const LocationIcon = styled("div")(({ theme }) => ({
@@ -365,9 +396,10 @@ const ViewImageButton = styled("button")(({ theme }) => ({
 const LocationDisplay = styled("div")(({ theme }) => ({
   fontSize: 12,
   color: "#757575",
-  textAlign: "left",
+  textAlign: "center",
   display: "flex",
-  alignItems: "flex-start",
+  alignItems: "center",
+  justifyContent: "center",
   gap: 4,
   width: "100%",
   padding: theme.spacing(0.5, 0),
@@ -783,12 +815,12 @@ const OnTime = () => {
           icon={faMapMarkerAlt} 
           style={{ 
             fontSize: 12, 
-            color: "#1976D2",
-            flexShrink: 0,
-            marginTop: 2
-          }} 
+          color: "#1976D2",
+          flexShrink: 0,
+          marginTop: 0
+        }}
         />
-        <span style={{ flex: 1 }}>{locationToShow}</span>
+        <span>{locationToShow}</span>
       </LocationDisplay>
     );
   };
@@ -1017,7 +1049,7 @@ const OnTime = () => {
                     {renderTimeOnly(employee.timeOut, false)}
                   </TableCell>
                   {/* LOCATION COLUMN CONTENT - Now with proper wrapping */}
-                  <TableCell style={{ padding: "12px 8px" }}>
+                  <TableCell style={{ padding: "12px 8px", textAlign: "center", verticalAlign: "middle" }}>
                     {renderLocation(employee.locationIn, employee)}
                   </TableCell>
                   <TableCell>
@@ -1112,7 +1144,7 @@ const OnTime = () => {
                 </div>
               )}
               {!imageLoading && !imageError && attendanceData && (
-                <>
+                <ImageGrid>
                   {/* Time In Section with Location */}
                   <ImageSection>
                     <ImageSectionTitle>
@@ -1123,8 +1155,8 @@ const OnTime = () => {
                       <TimeLabel>Check-in Time:</TimeLabel>
                       <TimeValue>{formatTime(attendanceData.timeIn)}</TimeValue>
                     </TimeInfo>
-                    {(attendanceData.location || attendanceData.locationIn) && (
-                      <LocationCard style={{ marginTop: 12, marginBottom: 12 }}>
+                    {(attendanceData.location || attendanceData.locationIn) ? (
+                      <LocationCard>
                         <LocationIcon>
                           <FontAwesomeIcon icon={faMapMarkerAlt} />
                         </LocationIcon>
@@ -1133,16 +1165,20 @@ const OnTime = () => {
                           <LocationText>{attendanceData.locationIn || attendanceData.location}</LocationText>
                         </LocationInfo>
                       </LocationCard>
+                    ) : (
+                      <LocationPlaceholder />
                     )}
                     {attendanceData.imageInBase64 ? (
-                      <AttendanceImage
-                        src={`data:image/jpeg;base64,${attendanceData.imageInBase64}`}
-                        alt="Time In Image"
-                        onError={(e) => {
-                          e.target.style.display = "none";
-                          e.target.parentNode.innerHTML = "<div style='padding: 20px; text-align: center; color: #999;'>Failed to load image</div>";
-                        }}
-                      />
+                      <ImageFrame>
+                        <AttendanceImage
+                          src={`data:image/jpeg;base64,${attendanceData.imageInBase64}`}
+                          alt="Time In Image"
+                          onError={(e) => {
+                            e.target.style.display = "none";
+                            e.target.parentNode.innerHTML = "<div style='padding: 20px; text-align: center; color: #999;'>Failed to load image</div>";
+                          }}
+                        />
+                      </ImageFrame>
                     ) : (
                       <NoImageText>No time-in image available</NoImageText>
                     )}
@@ -1159,8 +1195,8 @@ const OnTime = () => {
                       <TimeValue>{formatTime(attendanceData.timeOut) || "Not checked out yet"}</TimeValue>
                     </TimeInfo>
                     {/* Only show location if user has actually checked out AND location exists */}
-                    {attendanceData.timeOut && attendanceData.locationIn && (
-                      <LocationCard style={{ marginTop: 12, marginBottom: 12 }}>
+                    {attendanceData.timeOut && attendanceData.locationIn ? (
+                      <LocationCard>
                         <LocationIcon>
                           <FontAwesomeIcon icon={faMapMarkerAlt} />
                         </LocationIcon>
@@ -1169,21 +1205,25 @@ const OnTime = () => {
                           <LocationText>{attendanceData.locationIn || attendanceData.location}</LocationText>
                         </LocationInfo>
                       </LocationCard>
+                    ) : (
+                      <LocationPlaceholder />
                     )}
                     {attendanceData.imageOutBase64 ? (
-                      <AttendanceImage
-                        src={`data:image/jpeg;base64,${attendanceData.imageOutBase64}`}
-                        alt="Time Out Image"
-                        onError={(e) => {
-                          e.target.style.display = "none";
-                          e.target.parentNode.innerHTML = "<div style='padding: 20px; text-align: center; color: #999;'>Failed to load image</div>";
-                        }}
-                      />
+                      <ImageFrame>
+                        <AttendanceImage
+                          src={`data:image/jpeg;base64,${attendanceData.imageOutBase64}`}
+                          alt="Time Out Image"
+                          onError={(e) => {
+                            e.target.style.display = "none";
+                            e.target.parentNode.innerHTML = "<div style='padding: 20px; text-align: center; color: #999;'>Failed to load image</div>";
+                          }}
+                        />
+                      </ImageFrame>
                     ) : (
                       <NoImageText>No time-out image available</NoImageText>
                     )}
                   </ImageSection>
-                </>
+                </ImageGrid>
               )}
               {!imageLoading && !imageError && !attendanceData && (
                 <NoImageText>No attendance data found for this date</NoImageText>

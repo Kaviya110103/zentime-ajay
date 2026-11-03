@@ -3,7 +3,17 @@ import axios from "axios";
 const DEFAULT_API_BASE_URL = "https://iie.zentime.co.in";
 
 const normalizeApiBaseUrl = (value) => {
-  const trimmed = String(value || DEFAULT_API_BASE_URL).trim().replace(/\/$/, "");
+  const isLocalBrowser =
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  if (isLocalBrowser) {
+    return "";
+  }
+  const fallback = isLocalBrowser ? "" : DEFAULT_API_BASE_URL;
+  const trimmed = String(value || fallback).trim().replace(/\/$/, "");
+  if (!trimmed) {
+    return "";
+  }
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed;
   }
@@ -23,7 +33,8 @@ export const resolveBackendAssetUrl = (rawUrl) => {
   if (/^https?:\/\//i.test(value)) {
     try {
       const parsed = new URL(value);
-      if (parsed.protocol === "http:" || parsed.hostname !== new URL(API_BASE_URL).hostname) {
+      const apiHost = API_BASE_URL ? new URL(API_BASE_URL).hostname : window.location.hostname;
+      if (parsed.protocol === "http:" || parsed.hostname !== apiHost) {
         return `${API_BASE_URL}${parsed.pathname}${parsed.search}`;
       }
       return value;
