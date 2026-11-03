@@ -78,7 +78,16 @@ jobs:
                   if failure is not None:
                       detail = (failure.get("message") or failure.text or "Test failed").strip().replace("\n", " ")
                       failures.append(f"{case.get('classname')}.{case.get('name')}: {detail[:500]}")
-          message = failures[0] if failures else "Maven failed before producing a JUnit failure report. Download backend-surefire-reports for JVM dumps."
+          if failures:
+              message = failures[0]
+          else:
+              dumps = []
+              for pattern in ("*.dump", "*.dumpstream"):
+                  for dump in sorted(Path("target/surefire-reports").glob(pattern)):
+                      text = dump.read_text(errors="replace").strip().replace("\n", " ")
+                      if text:
+                          dumps.append(f"{dump.name}: {text[:1200]}")
+              message = dumps[0] if dumps else "Maven failed before producing a JUnit failure report or Surefire JVM dump."
           print(f"::error title=Backend test failure::{message}")
           PY
           exit 1
