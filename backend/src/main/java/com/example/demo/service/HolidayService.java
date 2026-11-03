@@ -5,7 +5,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
-import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,19 +41,19 @@ public class HolidayService {
     public Holiday createHoliday(Long clientId, HolidayRequest request) {
         ensureHolidayTableExists();
         LocalDate holidayDate = parseIsoDate(request.getHolidayDate());
+        LocalDate holidayEndDate = parseEndDate(request.getHolidayEndDate(), holidayDate);
         String holidayName = validateHolidayName(request.getHolidayName());
         String holidayType = normalizeHolidayType(request.getHolidayType());
         String branchScope = normalizeBranchScope(request.getBranchScope());
 
-        Optional<Holiday> existing = holidayRepository
-                .findByClientIdAndHolidayDateAndBranchScopeIgnoreCase(clientId, holidayDate, branchScope);
-        if (existing.isPresent()) {
-            throw new IllegalStateException("Holiday already exists for this date and branch.");
+        if (hasOverlappingHoliday(clientId, holidayDate, holidayEndDate, branchScope, null)) {
+            throw new IllegalStateException("Holiday overlaps an existing holiday for this branch.");
         }
 
         Holiday holiday = new Holiday();
         holiday.setClientId(clientId);
         holiday.setHolidayDate(holidayDate);
+        holiday.setHolidayEndDate(holidayEndDate);
         holiday.setHolidayName(holidayName);
         holiday.setHolidayType(holidayType);
         holiday.setBranchScope(branchScope);
@@ -78,17 +77,17 @@ public class HolidayService {
         }
 
         LocalDate holidayDate = parseIsoDate(request.getHolidayDate());
+        LocalDate holidayEndDate = parseEndDate(request.getHolidayEndDate(), holidayDate);
         String holidayName = validateHolidayName(request.getHolidayName());
         String holidayType = normalizeHolidayType(request.getHolidayType());
         String branchScope = normalizeBranchScope(request.getBranchScope());
 
-        Optional<Holiday> duplicate = holidayRepository
-                .findByClientIdAndHolidayDateAndBranchScopeIgnoreCase(clientId, holidayDate, branchScope);
-        if (duplicate.isPresent() && !duplicate.get().getId().equals(holidayId)) {
-            throw new IllegalStateException("Holiday already exists for this date and branch.");
+        if (hasOverlappingHoliday(clientId, holidayDate, holidayEndDate, branchScope, holidayId)) {
+            throw new IllegalStateException("Holiday overlaps an existing holiday for this branch.");
         }
 
         holiday.setHolidayDate(holidayDate);
+        holiday.setHolidayEndDate(holidayEndDate);
         holiday.setHolidayName(holidayName);
         holiday.setHolidayType(holidayType);
         holiday.setBranchScope(branchScope);
@@ -120,16 +119,37 @@ public class HolidayService {
             Employee employee = employeeRepository.findByIdAndClientId(employeeId, effectiveClientId)
                     .orElseThrow(() -> new NoSuchElementException("Employee not found for provided client."));
             String employeeBranch = normalizeBranchScope(employee.getBranch());
-            return holidayRepository.findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(
-                    effectiveClientId,
-                    firstDate,
-                    lastDate)
+            return getHolidaysOverlapping(effectiveClientId, firstDate, lastDate)
                     .stream()
                     .filter(holiday -> appliesToBranch(holiday, employeeBranch))
                     .toList();
         } catch (DateTimeException ex) {
             throw new IllegalArgumentException("Invalid month or year.");
         }
+    }
+
+    public List<Holiday> getUpcomingHolidaysForEmployee(Long employeeId, Long requestedClientId) {
+        ensureHolidayTableExists();
+        Long effectiveClientId = resolveClientId(employeeId, requestedClientId);
+        Employee employee = employeeRepository.findByIdAndClientId(employeeId, effectiveClientId)
+                .orElseThrow(() -> new NoSuchElementException("Employee not found for provided client."));
+        LocalDate today = LocalDate.now();
+        String employeeBranch = normalizeBranchScope(employee.getBranch());
+        return holidayRepository.findByClientIdOrderByHolidayDateAsc(effectiveClientId)
+                .stream()
+                .filter(holiday -> !holidayEndDate(holiday).isBefore(today))
+                .filter(holiday -> appliesToBranch(holiday, employeeBranch))
+                .toList();
+    }
+
+    public List<Holiday> getHolidaysOverlapping(Long clientId, LocalDate startDate, LocalDate endDate) {
+        if (clientId == null || startDate == null || endDate == null) {
+            return List.of();
+        }
+        return holidayRepository.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(clientId, endDate)
+                .stream()
+                .filter(holiday -> !holidayEndDate(holiday).isBefore(startDate))
+                .toList();
     }
 
     private Long resolveClientId(Long employeeId, Long requestedClientId) {
@@ -153,6 +173,40 @@ public class HolidayService {
         } catch (DateTimeException ex) {
             throw new IllegalArgumentException("holidayDate must be in yyyy-MM-dd format.");
         }
+    }
+
+    private LocalDate parseEndDate(String holidayEndDate, LocalDate holidayDate) {
+        LocalDate endDate = holidayEndDate == null || holidayEndDate.isBlank()
+                ? holidayDate
+                : parseIsoDate(holidayEndDate);
+        if (endDate.isBefore(holidayDate)) {
+            throw new IllegalArgumentException("To date must be on or after the from date.");
+        }
+        return endDate;
+    }
+
+    private boolean hasOverlappingHoliday(
+            Long clientId,
+            LocalDate startDate,
+            LocalDate endDate,
+            String branchScope,
+            Long excludedHolidayId) {
+        return holidayRepository.findByClientIdOrderByHolidayDateAsc(clientId).stream()
+                .filter(holiday -> excludedHolidayId == null || !excludedHolidayId.equals(holiday.getId()))
+                .filter(holiday -> {
+                    String existingScope = normalizeBranchScope(holiday.getBranchScope());
+                    return "ALL".equals(existingScope)
+                            || "ALL".equals(branchScope)
+                            || existingScope.equalsIgnoreCase(branchScope);
+                })
+                .anyMatch(holiday -> !holiday.getHolidayDate().isAfter(endDate)
+                        && !holidayEndDate(holiday).isBefore(startDate));
+    }
+
+    private LocalDate holidayEndDate(Holiday holiday) {
+        return holiday == null || holiday.getHolidayEndDate() == null
+                ? holiday == null ? LocalDate.MIN : holiday.getHolidayDate()
+                : holiday.getHolidayEndDate();
     }
 
     private String validateHolidayName(String holidayName) {

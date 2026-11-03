@@ -1,811 +1,232 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Card, Select, Space, Table, Tag, Typography, message } from "antd";
 import {
-  Table,
-  Button,
-  Modal,
-  Form,
-  DatePicker,
-  TimePicker,
-  message,
-  Tag,
-  Card,
-  Select,
-  Typography,
-  Statistic,
-  Space,
-  Popconfirm,
-} from "antd";
-import {
+  CalendarOutlined,
   ClockCircleOutlined,
-  CheckOutlined,
-  CloseOutlined,
   FilterOutlined,
-  DeleteOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import moment from "moment";
 import axios from "axios";
+import moment from "moment";
 import { API_BASE_URL, API_REQUEST_TIMEOUT_MS } from "../config/api";
 import { fetchBranchesFromLocationSet } from "../utils/branchSource";
 
-const { Option } = Select;
 const { Title, Text } = Typography;
-
-// Custom styles based on design requirements
-const styles = {
-  container: {
-    padding: "0px",
-    backgroundColor: "#F5F5F5",
-    minHeight: "100vh",
-    overflow: "hidden",
-  },
-  header: {
-    backgroundColor: "#351153",
-    color: "white",
-    padding: "16px",
-    borderRadius: "12px 12px 0 0",
-    boxShadow: "0 3px 5px rgba(0,0,0,0.2)",
-  },
-  title: {
-    color: "white",
-    fontSize: "1.3rem",
-    margin: 0,
-    fontFamily: "Montserrat, sans-serif",
-    fontWeight: "bold",
-  },
-  filtersContainer: {
-    backgroundColor: "white",
-    padding: "12px 16px",
-    borderBottom: "1px solid #f0f0f0",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  statsContainer: {
-    display: "flex",
-    gap: "16px",
-    flexWrap: "wrap",
-  },
-  statCard: {
-    backgroundColor: "white",
-    padding: "12px 20px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-    minWidth: "150px",
-  },
-  employeeInfo: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-  },
-  employeeName: {
-    fontWeight: 500,
-    fontFamily: "Open Sans, sans-serif",
-    color: "#212121",
-  },
-  employeeMobile: {
-    fontSize: "12px",
-    color: "#757575",
-    fontFamily: "Open Sans, sans-serif",
-  },
-  reasonCell: {
-    maxWidth: "200px",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    fontFamily: "Open Sans, sans-serif",
-    textAlign: "center",
-  },
-  timeoutNote: {
-    backgroundColor: "#FAFAFA",
-    padding: "12px",
-    borderRadius: "12px",
-    marginTop: "16px",
-    color: "#757575",
-    fontFamily: "Open Sans, sans-serif",
-  },
-  errorMessage: {
-    color: "#F44336",
-    marginBottom: "16px",
-    fontFamily: "Open Sans, sans-serif",
-  },
-  tableCard: {
-    borderRadius: "0 0 12px 12px",
-    boxShadow: "0 3px 6px rgba(0, 0, 0, 0.1)",
-    overflow: "hidden",
-  },
-  modalHeader: {
-    color: "#351153",
-    fontFamily: "Montserrat, sans-serif",
-    fontWeight: "bold",
-  },
-  tableCell: {
-    padding: "12px 16px",
-    fontFamily: "Open Sans, sans-serif",
-    textAlign: "center",
-  },
-  actionButton: {
-    backgroundColor: "#351153",
-    borderColor: "#351153",
-    fontFamily: "Open Sans, sans-serif",
-  },
-  statusContainer: {
-    display: "flex",
-    justifyContent: "center",
-  },
-  filterButton: {
-    marginLeft: "8px",
-  },
-  branchFilterSelect: {
-    minWidth: "220px",
-    height: "32px",
-    padding: "4px 12px",
-    borderRadius: "8px",
-    border: "1px solid #d9d9d9",
-    backgroundColor: "#fff",
-    fontFamily: "Open Sans, sans-serif",
-    color: "#212121",
-    outline: "none",
-  },
-  countBadge: {
-    backgroundColor: "#FF4D4F",
-    color: "white",
-    borderRadius: "10px",
-    padding: "2px 8px",
-    fontSize: "12px",
-    marginLeft: "8px",
-  },
-};
-
 const client = JSON.parse(localStorage.getItem("loggedInClient"));
 
+const formatDate = (value) => {
+  const parsed = moment(value, ["YYYY-MM-DD", "DD/MM/YYYY"], true);
+  return parsed.isValid() ? parsed.format("DD MMM YYYY") : "-";
+};
+
+const formatTime = (value) => {
+  const parsed = moment(value, ["HH:mm:ss", "HH:mm"], true);
+  return parsed.isValid() ? parsed.format("hh:mm A") : "-";
+};
+
 const MissedTimeoutPage = () => {
-  const [filteredData, setFilteredData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [selectedRecord, setSelectedRecord] = useState(null);
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [form] = Form.useForm();
-  const [currentDateTime, setCurrentDateTime] = useState(moment());
-  const [statusFilter, setStatusFilter] = useState("pending");
-  const [branchFilter, setBranchFilter] = useState("all");
+  const [records, setRecords] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [pendingData, setPendingData] = useState([]);
-  const [completedData, setCompletedData] = useState([]);
-  const [stats, setStats] = useState({
-    total: 0,
-  });
+  const [branchFilter, setBranchFilter] = useState("all");
+  const [employeeFilter, setEmployeeFilter] = useState("all");
+  const [loading, setLoading] = useState(false);
 
-  const getViewData = (type, pendingList, completedList) => {
-    if (type === "completed") return completedList;
-    return pendingList;
-  };
+  const loadRecords = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: "10000" });
+      if (client?.id) params.set("clientId", client.id);
+      if (branchFilter !== "all") params.set("branch", branchFilter);
 
-  const buildAttendanceUrl = (path) => {
-    const params = new URLSearchParams({ limit: "200" });
-    if (client?.id) {
-      params.set("clientId", client.id);
+      const response = await axios.get(
+        `${API_BASE_URL}/api/attendance/missed-timeout/submissions?${params.toString()}`,
+        { timeout: API_REQUEST_TIMEOUT_MS }
+      );
+      setRecords(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      console.error("Failed to load clock-out request report:", error);
+      message.error("Unable to load clock-out request report");
+      setRecords([]);
+    } finally {
+      setLoading(false);
     }
-    if (branchFilter !== "all") {
-      params.set("branch", branchFilter);
-    }
-    const query = `?${params.toString()}`;
-    return `${API_BASE_URL}/api/attendance/${path}${query}`;
-  };
-
-  const filterToRecentMonth = (items) => {
-    const cutoff = moment().subtract(1, "month").startOf("day");
-    return items.filter((item) => {
-      const recordDate = moment(item.date, "DD/MM/YYYY");
-      return recordDate.isSameOrAfter(cutoff, "day");
-    });
-  };
+  }, [branchFilter]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(() => {
-      setCurrentDateTime(moment());
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [branchFilter]);
+    loadRecords();
+  }, [loadRecords]);
 
   useEffect(() => {
     let active = true;
 
-    const fetchBranches = async () => {
-      if (!client?.id) {
-        if (active) setBranches([]);
-        return;
-      }
+    const loadBranches = async () => {
+      if (!client?.id) return;
       try {
         const names = await fetchBranchesFromLocationSet(client.id);
         if (active) setBranches(names);
       } catch (error) {
-        console.error("Failed to fetch branches from Location Set:", error);
+        console.error("Failed to load branches:", error);
         if (active) setBranches([]);
       }
     };
 
-    fetchBranches();
-
+    loadBranches();
     return () => {
       active = false;
     };
   }, []);
 
+  const employeeOptions = useMemo(() => {
+    const employees = new Map();
+    records.forEach((record) => {
+      const name =
+        `${record.firstName || ""} ${record.lastName || ""}`.trim() ||
+        "Unnamed employee";
+      employees.set(String(record.employeeId), name);
+    });
+    return Array.from(employees, ([value, label]) => ({ value, label }));
+  }, [records]);
+
+  const filteredRecords = useMemo(() => {
+    if (employeeFilter === "all") return records;
+    return records.filter((record) => String(record.employeeId) === employeeFilter);
+  }, [employeeFilter, records]);
+
   useEffect(() => {
-    const activeData = getViewData(statusFilter, pendingData, completedData);
-    setFilteredData(activeData);
-    setStats({
-      total: activeData.length,
-    });
-  }, [statusFilter, pendingData, completedData]);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const [pendingResult, completedResult] = await Promise.allSettled([
-        axios.get(buildAttendanceUrl("missed-timeout"), { timeout: API_REQUEST_TIMEOUT_MS }),
-        axios.get(buildAttendanceUrl("completed-missed-timeout"), { timeout: API_REQUEST_TIMEOUT_MS }),
-      ]);
-
-      if (completedResult.status === "rejected") {
-        console.warn(
-          "Completed missed-timeout endpoint unavailable:",
-          completedResult.reason
-        );
-      }
-
-      if (pendingResult.status === "rejected") {
-        console.warn("Pending missed-timeout endpoint unavailable:", pendingResult.reason);
-      }
-
-      const recentPending = filterToRecentMonth(
-        pendingResult.status === "fulfilled" && Array.isArray(pendingResult.value.data)
-          ? pendingResult.value.data
-          : []
-      );
-      const recentCompleted = filterToRecentMonth(
-        completedResult.status === "fulfilled" && Array.isArray(completedResult.value.data)
-          ? completedResult.value.data
-          : []
-      );
-
-      const sortByDateDesc = (items) => items.sort((a, b) => {
-        const dateA = moment(a.date, "DD/MM/YYYY");
-        const dateB = moment(b.date, "DD/MM/YYYY");
-        return dateB - dateA;
-      });
-
-      const sortedPending = sortByDateDesc([...recentPending]);
-      const sortedCompleted = sortByDateDesc([...recentCompleted]);
-      setPendingData(sortedPending);
-      setCompletedData(sortedCompleted);
-    } catch (error) {
-      message.error("Failed to fetch data");
-      console.error("Error fetching missed timeout data:", error);
-    } finally {
-      setLoading(false);
+    if (
+      employeeFilter !== "all" &&
+      !employeeOptions.some((option) => option.value === employeeFilter)
+    ) {
+      setEmployeeFilter("all");
     }
-  };
-
-  const handleStatusFilterChange = (value) => {
-    setStatusFilter(value);
-  };
-
-  const handleCompleteTimeout = (record) => {
-    const recordDate = moment(record.date, "DD/MM/YYYY");
-    const today = moment().startOf("day");
-
-    if (recordDate.isSame(today, "day")) {
-      message.error(
-        "Cannot complete timeout for current date. Please wait until tomorrow."
-      );
-      return;
-    }
-
-    setSelectedRecord(record);
-    form.setFieldsValue({
-      date: recordDate,
-      time: currentDateTime,
-    });
-    setIsModalVisible(true);
-  };
-
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      const selectedDate = moment(values.date);
-      const today = moment().startOf("day");
-
-      if (selectedDate.isSame(today, "day")) {
-        message.error(
-          "Cannot complete timeout for current date. Please wait until tomorrow."
-        );
-        return;
-      }
-
-      const dateTime = moment(values.date)
-        .hour(values.time.hour())
-        .minute(values.time.minute())
-        .second(values.time.second())
-        .format("YYYY-MM-DDTHH:mm:ss");
-
-      await axios.put(
-        `${API_BASE_URL}/api/attendance/complete-missed-timeout`,
-        null,
-        {
-          params: {
-            attendanceId: selectedRecord.attendanceId,
-            timeOut: dateTime,
-            missedTimes: selectedRecord.missedTimes || 1,
-          },
-        }
-      );
-
-      message.success("Timeout completed successfully");
-      setIsModalVisible(false);
-      fetchData();
-    } catch (error) {
-      message.error("Failed to complete timeout");
-      console.error("Error completing timeout:", error);
-    }
-  };
-
-  const handleDeleteCompleted = async (record) => {
-    try {
-      await axios.delete(
-        `${API_BASE_URL}/api/attendance/completed-missed-timeout/${record.attendanceId}`,
-        {
-          params: { clientId: client?.id },
-        }
-      );
-      message.success("Completed clockout request deleted successfully");
-      fetchData();
-    } catch (error) {
-      message.error("Failed to delete completed clockout request");
-      console.error("Error deleting completed clockout request:", error);
-    }
-  };
-
-  const handleDeleteAllCompleted = async () => {
-    try {
-      const response = await axios.delete(
-        `${API_BASE_URL}/api/attendance/completed-missed-timeout`,
-        { params: { clientId: client?.id } }
-      );
-      const deletedCount = response?.data?.deletedCount ?? 0;
-      message.success(
-        deletedCount > 0
-          ? `${deletedCount} completed requests deleted successfully`
-          : "No completed requests found to delete"
-      );
-      fetchData();
-    } catch (error) {
-      message.error("Failed to delete completed requests");
-      console.error("Error deleting all completed requests:", error);
-    }
-  };
+  }, [employeeFilter, employeeOptions]);
 
   const columns = [
     {
       title: "Employee",
-      dataIndex: "firstName",
-      key: "firstName",
-      width: 200,
+      key: "employee",
+      width: 220,
       fixed: "left",
-      align: "center",
-      render: (text, record) => (
-        <div style={styles.employeeInfo}>
-          <div style={styles.employeeName}>{text}</div>
-          <div style={styles.employeeMobile}>{record.mobile}</div>
+      render: (_, record) => (
+        <div>
+          <Text strong>
+            {`${record.firstName || ""} ${record.lastName || ""}`.trim() ||
+              "Unnamed employee"}
+          </Text>
+          <div className="clockout-muted">{record.mobile || "No mobile number"}</div>
         </div>
       ),
-    },
-    {
-      title: "Position",
-      dataIndex: "position",
-      key: "position",
-      width: 150,
-      align: "center",
-      render: (text) => <div style={styles.tableCell}>{text}</div>,
     },
     {
       title: "Branch",
       dataIndex: "branch",
-      key: "branch",
-      width: 150,
-      align: "center",
-      render: (text) => <div style={styles.tableCell}>{text}</div>,
+      width: 160,
+      render: (value) => value || "-",
     },
     {
-      title: "Date",
-      dataIndex: "date",
-      key: "date",
-      width: 150,
-      align: "center",
-      defaultSortOrder: "descend",
-      sorter: (a, b) => {
-        const dateA = moment(a.date, "DD/MM/YYYY");
-        const dateB = moment(b.date, "DD/MM/YYYY");
-        return dateA - dateB;
-      },
-      render: (text) => {
-        const recordDate = moment(text, "DD/MM/YYYY");
-        const today = moment().startOf("day");
-        const isToday = recordDate.isSame(today, "day");
-        
-        return (
-          <div style={styles.tableCell}>
-            {recordDate.format("DD MMM YYYY")}
-            {isToday && (
-              <Tag color="blue" style={{ marginLeft: "8px" }}>
-                Today
-              </Tag>
-            )}
-          </div>
-        );
-      },
+      title: "Position",
+      dataIndex: "position",
+      width: 170,
+      render: (value) => value || "-",
     },
     {
-      title: "Reason",
-      dataIndex: "timeoutReason",
-      key: "reason",
-      width: 200,
-      align: "center",
-      render: (reason) => (
-        <div
-          style={{ ...styles.reasonCell, ...styles.tableCell }}
-          title={reason}
-        >
-          {reason || "Not specified"}
-        </div>
+      title: "Attendance Date",
+      dataIndex: "attendanceDate",
+      width: 170,
+      sorter: (left, right) =>
+        moment(left.attendanceDate).valueOf() - moment(right.attendanceDate).valueOf(),
+      render: (value) => (
+        <Space size={6}>
+          <CalendarOutlined className="clockout-accent" />
+          {formatDate(value)}
+        </Space>
       ),
     },
     {
-      title: "Status",
-      key: "status",
-      width: 200,
-      align: "center",
-      render: (_, record) => {
-        const isCompleted = String(record?.status || "").toUpperCase() === "COMPLETED";
-        if (isCompleted) {
-          return (
-            <div style={styles.statusContainer}>
-              <Tag color="success" icon={<CheckOutlined />}>
-                Completed
-              </Tag>
-            </div>
-          );
-        }
-
-        const recordDate = moment(record.date, "DD/MM/YYYY");
-        const today = moment().startOf("day");
-        const isToday = recordDate.isSame(today, "day");
-
-        return (
-          <div style={styles.statusContainer}>
-            <Tag
-              icon={
-                isToday ? (
-                  <CloseOutlined />
-                ) : (
-                  <ClockCircleOutlined />
-                )
-              }
-              color={isToday ? "error" : "warning"}
-            >
-              {isToday
-                ? "Cannot complete today"
-                : "Missed Timeout"}
-            </Tag>
-          </div>
-        );
-      },
+      title: "Submitted Clock-Out",
+      dataIndex: "clockOutTime",
+      width: 190,
+      render: (value) => (
+        <Tag color="purple" icon={<ClockCircleOutlined />} className="clockout-time-value">
+          {formatTime(value)}
+        </Tag>
+      ),
     },
     {
-      title: "Action",
-      key: "action",
-      width: 180,
-      fixed: "right",
-      align: "center",
-      render: (_, record) => {
-        const isCompleted = String(record?.status || "").toUpperCase() === "COMPLETED";
-        if (isCompleted) {
-          return (
-            <div style={styles.tableCell}>
-              <Popconfirm
-                title="Delete completed request"
-                description="Are you sure you want to delete this completed clockout request?"
-                okText="Delete"
-                cancelText="Cancel"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => handleDeleteCompleted(record)}
-              >
-                <Button danger icon={<DeleteOutlined />} size="small">
-                  Delete
-                </Button>
-              </Popconfirm>
-            </div>
-          );
-        }
-
-        const recordDate = moment(record.date, "DD/MM/YYYY");
-        const today = moment().startOf("day");
-        const isToday = recordDate.isSame(today, "day");
-
-        return (
-          <div style={styles.tableCell}>
-            <Button
-              type="primary"
-              icon={<CheckOutlined />}
-              onClick={() => handleCompleteTimeout(record)}
-              disabled={isToday}
-              style={styles.actionButton}
-              size="small"
-            >
-              Complete
-            </Button>
-          </div>
-        );
-      },
+      title: "Employee Reason",
+      dataIndex: "reason",
+      width: 380,
+      render: (value) => (
+        <div className="clockout-reason">{value || "No reason provided"}</div>
+      ),
     },
   ];
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <Title level={3} style={styles.title}>
-          Missed Timeout Requests
-          {stats.total > 0 && (
-            <span style={styles.countBadge}>{stats.total}</span>
-          )}
-        </Title>
-      </div>
-
-      <div style={styles.filtersContainer}>
-        <div style={styles.statsContainer}>
-          <div style={styles.statCard}>
-            <Statistic
-              title="Total Requests"
-              value={stats.total}
-              valueStyle={{ color: "#351153" }}
-            />
-          </div>
+    <div className="clockout-page">
+      <section className="clockout-header">
+        <div>
+          <Title level={3}>Clock-Out Request Report</Title>
+          <Text>Pending requests and submitted clock-out history in one report.</Text>
         </div>
+      </section>
 
-        <Space wrap>
-          <select
-            value={branchFilter}
-            onChange={(event) => setBranchFilter(event.target.value)}
-            style={styles.branchFilterSelect}
-          >
-            <option value="all">All Branches</option>
-            {branches.map((branchName, index) => (
-              <option key={index} value={branchName}>
-                {branchName}
-              </option>
-            ))}
-          </select>
-
+      <section className="clockout-toolbar">
+        <Space wrap size={12}>
           <Select
-            value={statusFilter}
-            onChange={handleStatusFilterChange}
-            style={{ width: 220, minWidth: 220, flex: "0 0 220px" }}
+            value={branchFilter}
+            onChange={setBranchFilter}
+            style={{ width: 210 }}
             suffixIcon={<FilterOutlined />}
-            placeholder="Status"
-          >
-            <Option value="pending">Pending Requests</Option>
-            <Option value="completed">Completed Requests</Option>
-          </Select>
-
-          {statusFilter === "completed" && filteredData.length > 0 && (
-            <Popconfirm
-              title="Delete all completed requests"
-              description="Are you sure you want to delete all completed clockout requests?"
-              okText="Delete All"
-              cancelText="Cancel"
-              okButtonProps={{ danger: true }}
-              onConfirm={handleDeleteAllCompleted}
-            >
-              <Button danger icon={<DeleteOutlined />}>
-                Delete All Completed
-              </Button>
-            </Popconfirm>
-          )}
+            options={[
+              { value: "all", label: "All branches" },
+              ...branches.map((branch) => ({ value: branch, label: branch })),
+            ]}
+          />
+          <Select
+            showSearch
+            optionFilterProp="label"
+            value={employeeFilter}
+            onChange={setEmployeeFilter}
+            style={{ width: 250 }}
+            suffixIcon={<UserOutlined />}
+            options={[
+              { value: "all", label: "All employees" },
+              ...employeeOptions,
+            ]}
+          />
         </Space>
-      </div>
+      </section>
 
-      <Card style={styles.tableCard} bodyStyle={{ padding: 0 }}>
+      <Card className="clockout-table-card" bodyStyle={{ padding: 0 }}>
         <Table
           columns={columns}
-          dataSource={filteredData}
-          rowKey="attendanceId"
+          dataSource={filteredRecords}
+          rowKey="submissionId"
           loading={loading}
-          pagination={{
-            pageSize: 20, // Increased from 10 to show more records
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total, range) => 
-              `Showing ${range[0]}-${range[1]} of ${total} records`,
-            pageSizeOptions: ['10', '20', '50', '100'],
-          }}
-          scroll={{ 
-            x: 1200, 
-            y: "calc(100vh - 280px)" // Adjusted height for stats panel
-          }}
-          bordered
-          size="middle"
-          summary={() => (
-            <Table.Summary>
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={3}>
-                  <Text strong>Total Displayed:</Text>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={1}>
-                  <Text strong>{filteredData.length}</Text>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={2} colSpan={4}>
-                  <Text type="secondary">
-                    {statusFilter === "completed"
-                      ? "Showing completed clockout requests"
-                      : "Showing pending clockout requests"}
-                  </Text>
-                </Table.Summary.Cell>
-              </Table.Summary.Row>
-            </Table.Summary>
-          )}
+          pagination={false}
+          scroll={{ x: 1490, y: "calc(100vh - 245px)" }}
+          locale={{ emptyText: "No clock-out requests found" }}
         />
       </Card>
 
-      <Modal
-        title={
-          <span style={styles.modalHeader}>
-            Complete Timeout for {selectedRecord?.firstName}
-          </span>
-        }
-        visible={isModalVisible}
-        onOk={handleSubmit}
-        onCancel={() => setIsModalVisible(false)}
-        okText="Submit Timeout"
-        cancelText="Cancel"
-        okButtonProps={{
-          style: styles.actionButton,
-        }}
-        cancelButtonProps={{
-          style: { fontFamily: "Open Sans, sans-serif" },
-        }}
-      >
-        <Form form={form} layout="vertical">
-          <Form.Item
-            label={
-              <span style={{ fontFamily: "Open Sans, sans-serif" }}>Date</span>
-            }
-            name="date"
-            rules={[{ required: true, message: "Please select date" }]}
-          >
-            <DatePicker style={{ width: "100%" }} disabled />
-          </Form.Item>
-          <Form.Item
-            label={
-              <span style={{ fontFamily: "Open Sans, sans-serif" }}>
-                Timeout Time
-              </span>
-            }
-            name="time"
-            rules={[{ required: true, message: "Please select time" }]}
-          >
-            <TimePicker
-              style={{ width: "100%" }}
-              format="hh:mm A"
-              showNow={false}
-              defaultOpenValue={moment().subtract(1, "hours")}
-            />
-          </Form.Item>
-          {selectedRecord?.timeoutReason && (
-            <Form.Item
-              label={
-                <span style={{ fontFamily: "Open Sans, sans-serif" }}>
-                  Reason for missed timeout
-                </span>
-              }
-            >
-              <div
-                style={{
-                  padding: "8px",
-                  backgroundColor: "#FAFAFA",
-                  borderRadius: "8px",
-                }}
-              >
-                {selectedRecord.timeoutReason}
-              </div>
-            </Form.Item>
-          )}
-          <div style={styles.timeoutNote}>
-            <p>
-              Please select the actual time when the employee left the office.
-            </p>
-            <p style={styles.errorMessage}>
-              <strong>Note:</strong> Timeout cannot be completed for the current
-              date. Please wait until tomorrow to complete today's timeout.
-            </p>
-          </div>
-        </Form>
-      </Modal>
-
       <style>{`
-        ::-webkit-scrollbar {
-          display: none;
-        }
-        .ant-table {
-          font-family: "Open Sans", sans-serif;
-        }
-        .ant-table-thead > tr > th {
-          background-color: #351153 !important;
-          color: white !important;
-          font-family: "Montserrat", sans-serif !important;
-          font-weight: bold !important;
-          white-space: nowrap;
-          text-align: center !important;
-          position: sticky;
-          top: 0;
-          z-index: 1;
-        }
-        .ant-table-tbody > tr > td {
-          text-align: center !important;
-        }
-        .ant-table-tbody > tr:hover > td {
-          background-color: #f5f5f5 !important;
-        }
-        .ant-table-tbody > tr:nth-child(even) {
-          background-color: #fafafa;
-        }
-        .ant-modal-content {
-          border-radius: 12px;
-        }
-        .ant-input,
-        .ant-picker {
-          border-radius: 8px !important;
-        }
-        .ant-input:focus,
-        .ant-picker-focused {
-          border-color: #6a359c !important;
-          box-shadow: 0 0 0 2px rgba(106, 53, 156, 0.2) !important;
-        }
-        .ant-btn-primary:hover {
-          background-color: #6a359c !important;
-          border-color: #6a359c !important;
-          transform: scale(1.02);
-          transition: all 0.2s ease-in-out;
-        }
-        .ant-tag-error {
-          background-color: #f44336;
-          color: white;
-        }
-        .ant-tag-warning {
-          background-color: #ffc107;
-          color: #212121;
-        }
-        .ant-table-cell {
-          vertical-align: middle;
-        }
-        .ant-card-body {
-          padding: 0 !important;
-        }
-        .ant-statistic-title {
-          font-family: "Open Sans", sans-serif;
-          font-size: 12px;
-          color: #757575;
-        }
-        .ant-statistic-content {
-          font-family: "Montserrat", sans-serif;
-          font-weight: bold;
-        }
+        .clockout-page { min-height: 100vh; background: #f5f5f5; overflow: auto; }
+        .clockout-header { background: #351153; color: #fff; padding: 18px 20px; }
+        .clockout-header .ant-typography { color: #fff; margin: 0; }
+        .clockout-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 14px 18px; background: #fff; border-bottom: 1px solid #ececec; }
+        .clockout-table-card { border-radius: 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08); }
+        .clockout-table-card .ant-table-thead > tr > th { background: #351153; color: #fff; font-weight: 700; white-space: nowrap; }
+        .clockout-table-card .ant-table-tbody > tr > td { vertical-align: top; }
+        .clockout-table-card .ant-table-tbody > tr:hover > td { background: #faf7fd; }
+        .clockout-muted { color: #6b7280; font-size: 12px; margin-top: 2px; }
+        .clockout-reason { white-space: normal; line-height: 1.55; color: #263238; min-width: 280px; }
+        .clockout-accent { color: #5b2184; }
+        .clockout-time-value { font-weight: 700; font-size: 14px; padding: 4px 9px; }
+        @media (max-width: 760px) { .clockout-toolbar { align-items: flex-start; flex-direction: column; } }
       `}</style>
     </div>
   );
 };
 
 export default MissedTimeoutPage;
-
-
-
-

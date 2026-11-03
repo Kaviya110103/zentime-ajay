@@ -29,6 +29,7 @@ import com.example.demo.repo.AttendanceRecordRepository;
 import com.example.demo.repo.EmployeeRepository;
 import com.example.demo.repo.LeavePermissionRepository;
 import com.example.demo.repo.LocationRepository;
+import com.example.demo.repo.MissedTimeoutSubmissionRepository;
 import com.example.demo.repo.OvertimeRequestRepository;
 import com.example.demo.service.AdditionalWorkingDayService;
 import com.example.demo.service.AttendanceClassificationService;
@@ -53,6 +54,7 @@ class AttendanceControllerFlowTest {
     private AttendanceClassificationService attendanceClassificationService;
     private AdditionalWorkingDayService additionalWorkingDayService;
     private RequestFilterService requestFilterService;
+    private MissedTimeoutSubmissionRepository missedTimeoutSubmissionRepository;
 
     @BeforeEach
     void setUp() {
@@ -65,6 +67,7 @@ class AttendanceControllerFlowTest {
         attendanceClassificationService = mock(AttendanceClassificationService.class);
         additionalWorkingDayService = mock(AdditionalWorkingDayService.class);
         requestFilterService = mock(RequestFilterService.class);
+        missedTimeoutSubmissionRepository = mock(MissedTimeoutSubmissionRepository.class);
 
         ReflectionTestUtils.setField(controller, "employeeRepository", employeeRepository);
         ReflectionTestUtils.setField(controller, "employeeService", employeeService);
@@ -80,6 +83,11 @@ class AttendanceControllerFlowTest {
         ReflectionTestUtils.setField(controller, "attendanceRecordRepository", attendanceRecordRepository);
         ReflectionTestUtils.setField(controller, "schemaMaintenanceService", mock(SchemaMaintenanceService.class));
         ReflectionTestUtils.setField(controller, "overtimeRequestRepository", overtimeRequestRepository);
+        ReflectionTestUtils.setField(controller, "missedTimeoutSubmissionRepository", missedTimeoutSubmissionRepository);
+
+        when(missedTimeoutSubmissionRepository
+                .countByEmployeeIdAndSubmittedAtGreaterThanEqualAndSubmittedAtLessThan(any(), any(), any()))
+                .thenReturn(0L);
 
         when(shiftResolverService.resolve(any(Employee.class), any(LocalDate.class), any()))
                 .thenReturn(new ShiftResolverService.ShiftResolution(
@@ -116,6 +124,7 @@ class AttendanceControllerFlowTest {
         String yesterday = LocalDate.now().minusDays(1).format(DB_DATE);
         AttendanceRecord yesterdayRecord = record(100L, employee, yesterday);
         yesterdayRecord.setAttendanceStatus("Present");
+        yesterdayRecord.setTimeIn(LocalDateTime.of(LocalDate.now().minusDays(1), LocalTime.of(9, 0)));
         yesterdayRecord.setTimeOut(null);
         yesterdayRecord.setTimoutReason(null);
 

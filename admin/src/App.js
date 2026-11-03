@@ -18,6 +18,7 @@ import HolidayCalendar from './pages/HolidayCalendar';
 import OvertimeRequests from './pages/OvertimeRequests';
 import WeekoffRequests from './pages/WeekoffRequests';
 import AttendanceSupportRequests from './pages/AttendanceSupportRequests';
+import Archives from './pages/Archives';
 import AdminLayout from './component/AdminLayout';
 
 const INACTIVITY_MS = 5 * 60 * 1000;
@@ -164,6 +165,10 @@ function App() {
 
           <Route path="AttendanceSupportRequests" element={
             protectedPage(<AttendanceSupportRequests />)
+          } />
+
+          <Route path="Archives" element={
+            protectedPage(<Archives />)
           } />
         </Routes>
       </div>

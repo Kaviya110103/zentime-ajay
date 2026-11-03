@@ -112,7 +112,8 @@ INSERT INTO tenant_qa001.employee (
   additional_working_days,
   company_code,
   employee_code,
-  client_id
+  client_id,
+  employment_status
 ) VALUES
   (
     1,
@@ -142,7 +143,8 @@ INSERT INTO tenant_qa001.employee (
     NULL,
     'QA001',
     'QA001.EMP1',
-    1
+    1,
+    'ACTIVE'
   ),
   (
     2,
@@ -172,7 +174,8 @@ INSERT INTO tenant_qa001.employee (
     NULL,
     'QA001',
     'QA001.EMP2',
-    1
+    1,
+    'ACTIVE'
   );
 
 INSERT INTO tenant_qa002.employee (
@@ -203,7 +206,8 @@ INSERT INTO tenant_qa002.employee (
   additional_working_days,
   company_code,
   employee_code,
-  client_id
+  client_id,
+  employment_status
 ) VALUES
   (
     3,
@@ -233,7 +237,8 @@ INSERT INTO tenant_qa002.employee (
     NULL,
     'QA002',
     'QA002.EMP3',
-    2
+    2,
+    'ACTIVE'
   );
 
 INSERT INTO tenant_qa001.attendance_record (

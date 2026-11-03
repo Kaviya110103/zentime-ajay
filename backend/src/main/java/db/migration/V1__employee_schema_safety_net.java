@@ -136,6 +136,8 @@ public class V1__employee_schema_safety_net extends BaseJavaMigration {
     private void ensureHolidayTable(Connection connection) throws Exception {
         if (tableExists(connection, "holidays")) {
             ensureColumn(connection, "holidays", "branch_scope", "VARCHAR(255) NOT NULL DEFAULT 'ALL'");
+            ensureColumn(connection, "holidays", "holiday_end_date", "DATE NULL");
+            execute(connection, "UPDATE holidays SET holiday_end_date = holiday_date WHERE holiday_end_date IS NULL");
             return;
         }
         execute(connection, """
@@ -143,6 +145,7 @@ public class V1__employee_schema_safety_net extends BaseJavaMigration {
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     client_id BIGINT NOT NULL,
                     holiday_date DATE NOT NULL,
+                    holiday_end_date DATE NOT NULL,
                     holiday_name VARCHAR(255) NOT NULL,
                     holiday_type VARCHAR(16) NOT NULL,
                     branch_scope VARCHAR(255) NOT NULL DEFAULT 'ALL',

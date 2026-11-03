@@ -72,7 +72,8 @@ public ResponseEntity<String> createLeave(@RequestParam Long employeeId,
     String today = LocalDate.now().format(formatter);
     leavePermission.setDate(today);
 
-    leavePermissionRepository.save(leavePermission);
+    LeavePermission savedLeave = leavePermissionRepository.save(leavePermission);
+    pushNotificationService.notifyNewLeaveRequest(savedLeave);
     return ResponseEntity.ok("Leave permission submitted successfully.");
 }
 
@@ -257,7 +258,8 @@ public ResponseEntity<Long> countLeavesByStatus(
         leave.setEndTime(endTime);
         leave.setStatus("pending");
 
-        leavePermissionRepository.save(leave);
+        LeavePermission savedLeave = leavePermissionRepository.save(leave);
+        pushNotificationService.notifyNewLeaveRequest(savedLeave);
         return ResponseEntity.ok("Leave request submitted successfully.");
     }
 

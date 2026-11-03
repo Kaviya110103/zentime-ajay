@@ -55,7 +55,6 @@ export const EmployeeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         } else {
           setEmployeeState(null);
         }
-        await AsyncStorage.multiRemove(['adminClient', 'sessionType']);
       } finally {
         setAuthReady(true);
       }
@@ -75,7 +74,7 @@ export const EmployeeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const logout = useCallback(async () => {
     setEmployeeState(null);
     try {
-      await AsyncStorage.multiRemove(['employee', 'adminClient', 'sessionType', 'employeeCredentials']);
+      await AsyncStorage.multiRemove(['employee', 'employeeCredentials']);
     } catch (error) {
       console.warn('Failed to clear auth storage on logout:', error);
     }

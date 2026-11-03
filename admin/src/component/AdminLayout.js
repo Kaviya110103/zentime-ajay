@@ -17,6 +17,7 @@ import {
   FaSignOutAlt,
   FaUserClock,
   FaUserPlus,
+  FaArchive,
 } from "react-icons/fa";
 import logo from "../logo.png";
 import "./AdminLayout.css";
@@ -24,6 +25,7 @@ import "./AdminLayout.css";
 const NAV_ITEMS = [
   { label: "Overview", path: "/AdminDashboard", icon: <FaHome /> },
   { label: "Add Employee", path: "/add-employee", icon: <FaUserPlus /> },
+  { label: "Archives", path: "/Archives", icon: <FaArchive /> },
   { label: "Leave & Permissions", path: "/leaveadmin", icon: <FaCalendarCheck /> },
   { label: "Attendance Records", path: "/AttendanceRecords", icon: <FaClipboardList /> },
   { label: "Overtime Requests", path: "/OvertimeRequests", icon: <FaHourglassHalf /> },

@@ -5,8 +5,10 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,11 +23,15 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.example.demo.MODELS.Announcement;
+import com.example.demo.MODELS.AdminPushToken;
+import com.example.demo.MODELS.AttendanceSupportRequest;
 import com.example.demo.MODELS.Employee;
 import com.example.demo.MODELS.EmployeePushToken;
 import com.example.demo.MODELS.Holiday;
 import com.example.demo.MODELS.LeavePermission;
+import com.example.demo.repo.AdminPushTokenRepository;
 import com.example.demo.repo.EmployeePushTokenRepository;
+import com.example.demo.tenant.TenantContext;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -34,6 +40,7 @@ public class PushNotificationService {
     private static final Logger logger = LoggerFactory.getLogger(PushNotificationService.class);
 
     private final EmployeePushTokenRepository tokenRepository;
+    private final AdminPushTokenRepository adminTokenRepository;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
@@ -43,8 +50,12 @@ public class PushNotificationService {
     @Value("${push.expo.url:https://exp.host/--/api/v2/push/send}")
     private String expoPushUrl;
 
-    public PushNotificationService(EmployeePushTokenRepository tokenRepository, ObjectMapper objectMapper) {
+    public PushNotificationService(
+            EmployeePushTokenRepository tokenRepository,
+            AdminPushTokenRepository adminTokenRepository,
+            ObjectMapper objectMapper) {
         this.tokenRepository = tokenRepository;
+        this.adminTokenRepository = adminTokenRepository;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newHttpClient();
     }
@@ -60,6 +71,27 @@ public class PushNotificationService {
         entity.setEmployee(employee);
         entity.setToken(token);
         tokenRepository.save(entity);
+    }
+
+    public void registerAdminToken(Long clientId, String token) {
+        if (clientId == null || clientId <= 0 || !isValidExpoToken(token)) {
+            return;
+        }
+        String previousTenantDb = TenantContext.getTenantDb();
+        try {
+            TenantContext.clear();
+            if (adminTokenRepository.findByClientIdAndToken(clientId, token).isPresent()) {
+                return;
+            }
+            AdminPushToken entity = new AdminPushToken();
+            entity.setClientId(clientId);
+            entity.setToken(token);
+            adminTokenRepository.save(entity);
+        } catch (RuntimeException ex) {
+            logger.warn("Admin push token registration failed for clientId={}", clientId, ex);
+        } finally {
+            restoreTenantContext(previousTenantDb);
+        }
     }
 
     public void notifyAnnouncement(Announcement announcement) {
@@ -115,6 +147,75 @@ public class PushNotificationService {
                 "status", status
         );
         sendToEmployee(leave.getEmployee(), title, body, data);
+    }
+
+    public void notifyNewLeaveRequest(LeavePermission leave) {
+        if (leave == null || leave.getEmployee() == null) return;
+        Long clientId = leave.getEmployee().getClientId();
+        if (clientId == null) return;
+
+        String leaveType = leave.getLeaveType() == null || leave.getLeaveType().isBlank()
+                ? "Leave"
+                : leave.getLeaveType().trim();
+        String employeeName = buildEmployeeName(leave.getEmployee());
+        boolean isPermission = "permission".equalsIgnoreCase(leaveType);
+        String title = leaveType + " Request";
+        String body = isPermission
+                ? employeeName + " requested permission on " + formatLeaveRequestDate(leave) + "."
+                : employeeName + " requested " + leaveType + " for " + formatLeaveRequestDate(leave) + ".";
+        Map<String, Object> data = Map.of(
+                "type", "leave_request",
+                "leaveId", leave.getId(),
+                "clientId", clientId,
+                "leaveType", leaveType,
+                "requestDate", formatLeaveRequestDate(leave)
+        );
+        sendToTokens(findAdminTokensByClientId(clientId), title, body, data);
+    }
+
+    public void notifyNewSupportRequest(AttendanceSupportRequest request) {
+        if (request == null || request.getEmployee() == null) return;
+        Long clientId = request.getEmployee().getClientId();
+        if (clientId == null) return;
+
+        String employeeName = buildEmployeeName(request.getEmployee());
+        String requestType = request.getRequestType() == null ? "" : request.getRequestType().trim();
+        boolean attendanceRequest = requestType.equalsIgnoreCase("Attendance Support");
+        String title = attendanceRequest ? "Attendance Request" : "Support Request";
+        String body = attendanceRequest
+                ? employeeName + " sent attendance request for " + formatSupportDate(request.getAttendanceDate()) + "."
+                : employeeName + " sent support request.";
+        Map<String, Object> data = Map.of(
+                "type", "support_request",
+                "supportRequestId", request.getId(),
+                "clientId", clientId,
+                "requestType", requestType.isBlank() ? "Support Request" : requestType
+        );
+        sendToTokens(findAdminTokensByClientId(clientId), title, body, data);
+    }
+
+    private List<String> findAdminTokensByClientId(Long clientId) {
+        if (clientId == null || clientId <= 0) {
+            return List.of();
+        }
+        String previousTenantDb = TenantContext.getTenantDb();
+        try {
+            TenantContext.clear();
+            return adminTokenRepository.findTokensByClientId(clientId);
+        } catch (RuntimeException ex) {
+            logger.warn("Admin push token lookup failed for clientId={}", clientId, ex);
+            return List.of();
+        } finally {
+            restoreTenantContext(previousTenantDb);
+        }
+    }
+
+    private void restoreTenantContext(String tenantDb) {
+        if (tenantDb == null || tenantDb.isBlank()) {
+            TenantContext.clear();
+        } else {
+            TenantContext.setTenantDb(tenantDb);
+        }
     }
 
     public void notifyLogin(Employee employee) {
@@ -174,6 +275,9 @@ public class PushNotificationService {
             payload.put("to", token);
             payload.put("title", title);
             payload.put("body", body);
+            payload.put("sound", "default");
+            payload.put("priority", "high");
+            payload.put("channelId", "zentime");
             if (data != null && !data.isEmpty()) {
                 payload.put("data", data);
             }
@@ -208,6 +312,66 @@ public class PushNotificationService {
         if (token == null) return false;
         if (!token.endsWith("]")) return false;
         return token.startsWith("ExpoPushToken[") || token.startsWith("ExponentPushToken[");
+    }
+
+    private String buildEmployeeName(Employee employee) {
+        if (employee == null) {
+            return "Employee";
+        }
+        String firstName = employee.getFirstName() == null ? "" : employee.getFirstName().trim();
+        String lastName = employee.getLastName() == null ? "" : employee.getLastName().trim();
+        String fullName = (firstName + " " + lastName).trim();
+        if (!fullName.isBlank()) {
+            return fullName;
+        }
+        if (employee.getUsername() != null && !employee.getUsername().isBlank()) {
+            return employee.getUsername().trim();
+        }
+        return "Employee";
+    }
+
+    private String formatLeaveRequestDate(LeavePermission leave) {
+        LocalDate start = parseFlexibleDate(leave == null ? null : leave.getStartDate());
+        LocalDate end = parseFlexibleDate(leave == null ? null : leave.getEndDate());
+        if (start == null) {
+            start = parseFlexibleDate(leave == null ? null : leave.getDate());
+        }
+        if (start == null) {
+            return "the selected date";
+        }
+
+        String startText = start.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+        if (end == null || end.equals(start)) {
+            return startText;
+        }
+        return startText + " to " + end.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+    }
+
+    private String formatSupportDate(LocalDate date) {
+        if (date == null) {
+            return "the selected date";
+        }
+        return date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+    }
+
+    private LocalDate parseFlexibleDate(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim();
+        DateTimeFormatter[] formatters = new DateTimeFormatter[] {
+                DateTimeFormatter.ISO_LOCAL_DATE,
+                DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+                DateTimeFormatter.ofPattern("d/M/yyyy")
+        };
+        for (DateTimeFormatter formatter : formatters) {
+            try {
+                return LocalDate.parse(value, formatter);
+            } catch (DateTimeParseException ignored) {
+                // Try next supported date format.
+            }
+        }
+        return null;
     }
 
     private String normalizeBranchScope(String branchScope) {
