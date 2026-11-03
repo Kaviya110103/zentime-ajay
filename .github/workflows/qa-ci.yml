@@ -78,7 +78,7 @@ jobs:
                   if failure is None:
                       failure = case.find("error")
                   if failure is not None:
-                      summary = (failure.get("message") or "Test failed").strip()
+                      summary = (failure.get("message") or "Test failed").strip()[:400]
                       trace = (failure.text or "").strip()
                       detail = f"{summary}\n{trace[-8000:]}" if trace else summary
                       failures.append(f"{case.get('classname')}.{case.get('name')}: {detail}")
