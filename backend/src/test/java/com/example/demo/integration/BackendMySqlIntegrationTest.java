@@ -29,6 +29,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
@@ -79,7 +80,7 @@ class BackendMySqlIntegrationTest {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private ConfigurableApplicationContext applicationContext;
+    private ApplicationContext applicationContext;
 
     @BeforeEach
     void setUp() {
@@ -104,7 +105,9 @@ class BackendMySqlIntegrationTest {
     @AfterAll
     void closeApplicationContextBeforeContainerStops() {
         TenantContext.clear();
-        applicationContext.close();
+        if (applicationContext instanceof ConfigurableApplicationContext configurableContext) {
+            configurableContext.close();
+        }
     }
 
     @Test
