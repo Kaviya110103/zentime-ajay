@@ -40,6 +40,8 @@ jobs:
         run: chmod +x ./mvnw
 
       - name: Run backend unit and integration tests
+        id: backend-tests
+        continue-on-error: true
         run: ./mvnw -B test
 
       - name: Publish backend test results
@@ -59,6 +61,27 @@ jobs:
           name: backend-surefire-reports
           path: backend/target/surefire-reports/
           if-no-files-found: warn
+
+      - name: Surface backend test failure
+        if: steps.backend-tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+
+          reports = sorted(Path("target/surefire-reports").glob("TEST-*.xml"))
+          failures = []
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for case in root.findall(".//testcase"):
+                  failure = case.find("failure") or case.find("error")
+                  if failure is not None:
+                      detail = (failure.get("message") or failure.text or "Test failed").strip().replace("\n", " ")
+                      failures.append(f"{case.get('classname')}.{case.get('name')}: {detail[:500]}")
+          message = failures[0] if failures else "Maven failed before producing a JUnit failure report. Download backend-surefire-reports for JVM dumps."
+          print(f"::error title=Backend test failure::{message}")
+          PY
+          exit 1
 
   admin-build:
     name: Admin Build
