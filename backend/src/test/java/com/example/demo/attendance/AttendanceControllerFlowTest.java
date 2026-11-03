@@ -124,6 +124,7 @@ class AttendanceControllerFlowTest {
         String yesterday = LocalDate.now().minusDays(1).format(DB_DATE);
         AttendanceRecord yesterdayRecord = record(100L, employee, yesterday);
         yesterdayRecord.setAttendanceStatus("Present");
+        yesterdayRecord.setTimeIn(LocalDateTime.of(LocalDate.now().minusDays(1), LocalTime.of(9, 0)));
         yesterdayRecord.setTimeOut(null);
         yesterdayRecord.setTimoutReason(null);
 
