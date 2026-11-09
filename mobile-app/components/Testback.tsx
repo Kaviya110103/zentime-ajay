@@ -22,6 +22,7 @@ const AttendanceFlow: React.FC = () => {
   const [holidayToday, setHolidayToday] = useState<HolidayInfo | null>(null);
   const [leaveLoading, setLeaveLoading] = useState(true);
   const [leaveToday, setLeaveToday] = useState(false);
+  const [additionalWorkingDays, setAdditionalWorkingDays] = useState<AdditionalWorkingDay[]>([]);
   const [view, setView] = useState<"main" | "start" | "timeIn" | "timeOut" | "closed">("main");
   const [navigationInProgress, setNavigationInProgress] = useState(false);
   const [showEarlyClockOutModal, setShowEarlyClockOutModal] = useState(false);
@@ -163,12 +164,30 @@ const AttendanceFlow: React.FC = () => {
     }
   }, [employeeId, employee?.clientId]);
 
+  const fetchAdditionalWorkingDays = useCallback(async () => {
+    if (!employeeId || !employee?.clientId) {
+      setAdditionalWorkingDays([]);
+      return;
+    }
+
+    try {
+      const { data } = await axios.get<AdditionalWorkingDay[]>(
+        buildApiUrl(`/api/employees/${employeeId}/additional-working-days`, { clientId: employee.clientId })
+      );
+      setAdditionalWorkingDays(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.log("Additional working days fetch failed:", (error as any)?.message);
+      setAdditionalWorkingDays([]);
+    }
+  }, [employeeId, employee?.clientId]);
+
   // Initial fetch
   useEffect(() => {
     fetchRecord(true);
     fetchTodayHoliday();
     fetchTodayLeave();
-  }, [fetchRecord, fetchTodayHoliday, fetchTodayLeave]);
+    fetchAdditionalWorkingDays();
+  }, [fetchRecord, fetchTodayHoliday, fetchTodayLeave, fetchAdditionalWorkingDays]);
 
   // Handle navigation based on view
   useEffect(() => {
@@ -185,7 +204,15 @@ const AttendanceFlow: React.FC = () => {
           const currentHour = now.getHours();
           const currentMinutes = now.getMinutes();
           const currentTimeInMinutes = currentHour * 60 + currentMinutes;
-          const configuredShiftEnd = parseTimeStringToMinutes(employee?.shiftEndTime);
+          const additionalShift = resolveAdditionalWorkingDay(additionalWorkingDays, now);
+          const additionalShiftEnd =
+            additionalShift?.timeOut ||
+            additionalShift?.endTime ||
+            additionalShift?.shiftEndTime;
+          const configuredShiftEnd =
+            parseTimeStringToMinutes(additionalShiftEnd) ??
+            parseTimeStringToMinutes(record?.expectedShiftEnd) ??
+            parseTimeStringToMinutes(employee?.shiftEndTime);
           let allowedTimeInMinutes = configuredShiftEnd;
 
           if (allowedTimeInMinutes == null) {
@@ -231,7 +258,7 @@ const AttendanceFlow: React.FC = () => {
     if (view === "timeIn" || view === "timeOut") {
       performNavigation();
     }
-  }, [view, record]);
+  }, [view, record, employee?.shiftEndTime, additionalWorkingDays]);
 
   const determineAction = useCallback((): { label: string; action: () => void } => {
     if (!record) {
@@ -456,6 +483,8 @@ type Record = {
   dayStatus?: string;
   attendanceStatus?: string;
   date?: string;
+  expectedShiftStart?: string;
+  expectedShiftEnd?: string;
 };
 
 type HolidayInfo = {
@@ -472,6 +501,16 @@ type LeaveInfo = {
   status?: string;
 };
 
+type AdditionalWorkingDay = {
+  dayType?: string;
+  timeIn?: string;
+  timeOut?: string;
+  startTime?: string;
+  endTime?: string;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
+};
+
 function formatDDMMYYYY(d: Date) {
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -480,7 +519,19 @@ function formatDDMMYYYY(d: Date) {
 
 function parseTimeStringToMinutes(timeString?: string | null): number | null {
   if (!timeString) return null;
-  const parts = timeString.split(":");
+  const clean = timeString.trim();
+  const meridiemMatch = clean.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i);
+  if (meridiemMatch) {
+    let hours = Number(meridiemMatch[1]);
+    const minutes = Number(meridiemMatch[2]);
+    const meridiem = meridiemMatch[3].toUpperCase();
+    if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return null;
+    if (meridiem === "PM" && hours !== 12) hours += 12;
+    if (meridiem === "AM" && hours === 12) hours = 0;
+    return hours * 60 + minutes;
+  }
+
+  const parts = clean.split(":");
   if (parts.length < 2) return null;
   const hours = Number(parts[0]);
   const minutes = Number(parts[1]);
@@ -495,6 +546,29 @@ function parseTimeStringToMinutes(timeString?: string | null): number | null {
     return null;
   }
   return hours * 60 + minutes;
+}
+
+function resolveAdditionalWorkingDay(
+  days: AdditionalWorkingDay[],
+  current: Date
+): AdditionalWorkingDay | null {
+  const type = additionalWorkingType(current);
+  if (!type) return null;
+
+  return (
+    days.find((day) => String(day?.dayType || "").trim().toUpperCase() === type) ||
+    null
+  );
+}
+
+function additionalWorkingType(date: Date): string | null {
+  const day = date.getDay();
+  if (day !== 0 && day !== 6) return null;
+
+  const weekOfMonth = Math.floor((date.getDate() - 1) / 7) + 1;
+  const prefix = weekOfMonth % 2 === 1 ? "ODD" : "EVEN";
+  const suffix = day === 6 ? "SATURDAY" : "SUNDAY";
+  return `${prefix}_${suffix}`;
 }
 
 function isSameDateString(dateStr: string, target: Date) {

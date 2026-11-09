@@ -1,0 +1,274 @@
+package com.example.demo.service;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
+import java.math.BigDecimal;
+import java.util.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import com.example.demo.MODELS.*;
+import com.example.demo.repo.*;
+
+class PayrollMinuteCalculationTest {
+    private final EmployeeRepository employees = mock(EmployeeRepository.class);
+    private final AttendanceRecordRepository attendance = mock(AttendanceRecordRepository.class);
+    private final LeavePermissionRepository leaves = mock(LeavePermissionRepository.class);
+    private final OvertimeRequestRepository overtime = mock(OvertimeRequestRepository.class);
+    private final AdditionalWorkingDayService additionalWorkingDays = mock(AdditionalWorkingDayService.class);
+    private final HolidayRepository holidays = mock(HolidayRepository.class);
+    private final List<AttendanceRecord> records = new ArrayList<>();
+    private final List<LeavePermission> approvals = new ArrayList<>();
+    private Employee employee;
+    private PayrollCalculationService service;
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    @BeforeEach void setup() {
+        employee = new Employee(); employee.setId(1L); employee.setClientId(1L);
+        employee.setFirstName("QA"); employee.setSalary(16740.0);
+        employee.setShiftStartTime("10:00"); employee.setShiftEndTime("19:00");
+        employee.setCasualLeaveBalance(1); employee.setPermissionHoursAllowed(1.0);
+        var classifier = new AttendanceClassificationService(
+                additionalWorkingDays,
+                holidays,
+                new ShiftResolverService(additionalWorkingDays, holidays));
+        service = new PayrollCalculationService(employees, attendance, mock(AttendanceSupportRequestRepository.class),
+                leaves, holidays, mock(LeavePolicyRepository.class), mock(SchemaMaintenanceService.class), overtime, classifier);
+        when(employees.findById(1L)).thenReturn(Optional.of(employee));
+        when(attendance.findByEmployeeId(1L)).thenReturn(records);
+        when(leaves.findByEmployeeIdAndStatus(1L, "approved")).thenReturn(approvals);
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any())).thenReturn(Map.of());
+        when(holidays.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(any(), any()))
+                .thenReturn(List.of());
+        for (int d = 1; d <= 31; d++) {
+            var record = new AttendanceRecord(); var date = LocalDate.of(2026, 8, d);
+            record.setId((long) d); record.setEmployee(employee); record.setDate(date.format(DATE));
+            record.setTimeIn(date.atTime(10, 0)); record.setTimeOut(date.atTime(19, 0));
+            record.setAttendanceStatus("Present"); record.setWorkedHours(1.0); // Deliberately stale.
+            records.add(record);
+        }
+    }
+    private PayrollCalculationService.PayrollResult calculate() { return calculate(8, 2026); }
+    private PayrollCalculationService.PayrollResult calculate(int month, int year) {
+        return service.calculateMonthlyPayroll(1L, month, year, 1L);
+    }
+    private AttendanceRecord attendanceFor(LocalDate date, boolean closed) {
+        var record = new AttendanceRecord();
+        record.setId((long) records.size() + 1);
+        record.setEmployee(employee);
+        record.setDate(date.format(DATE));
+        record.setTimeIn(date.atTime(10, 0));
+        if (closed) {
+            record.setTimeOut(date.atTime(19, 0));
+        }
+        record.setAttendanceStatus("Present");
+        return record;
+    }
+    private LeavePermission approval(String type, int day) {
+        var leave = new LeavePermission(); leave.setEmployee(employee); leave.setLeaveType(type);
+        leave.setDate(LocalDate.of(2026, 8, day).format(DATE));
+        leave.setStartDate(leave.getDate()); leave.setEndDate(leave.getDate()); leave.setStatus("approved");
+        approvals.add(leave); return leave;
+    }
+    @Test void fullSchedulePaysBaseAndIgnoresStaleWorkedHoursAndUnusedClEntitlement() {
+        var result = calculate();
+        assertThat(result.scheduledWorkingMinutes()).isEqualTo(16740);
+        assertThat(result.netSalary()).isEqualTo(16740);
+        assertThat(result.payableWorkingMinutes()).isEqualTo(16740);
+    }
+    @Test void lateAndEarlyDeductOnce() {
+        var first = records.get(0); first.setTimeIn(first.getTimeIn().plusMinutes(20)); first.setTimeOut(first.getTimeOut().minusMinutes(40));
+        var result = calculate();
+        assertThat(result.estimatedNetSalary()).isEqualTo(16740);
+        assertThat(result.netSalary()).isEqualTo(16740);
+        assertThat(result.lateAttendanceMinutes()).isEqualTo(20);
+        assertThat(result.absentMinutes()).isEqualTo(60);
+        assertThat(result.unpaidMissingMinutes()).isEqualTo(0);
+        assertThat(result.lateAmount()).isEqualByComparingTo("20");
+        assertThat(result.attendanceDeduction()).isEqualByComparingTo("0");
+    }
+    @Test void unpaidLeaveIsNotPaid() {
+        records.remove(0); approval("Unpaid Leave", 1);
+        assertThat(calculate().netSalary()).isEqualTo(16200);
+    }
+    @Test void paidLeaveCreditsOnlyTheDaysOwnShift() {
+        records.remove(0); approval("Paid Leave", 1);
+        assertThat(calculate().netSalary()).isEqualTo(16740);
+    }
+    @Test void overlappingPermissionIsUnionedAndMonthlyAllowanceIsCapped() {
+        var first = records.get(0); first.setTimeIn(first.getTimeIn().plusHours(2));
+        for (int i = 0; i < 2; i++) { var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("12:00"); }
+        var result = calculate();
+        assertThat(result.permissionDurationMinutes()).isEqualTo(60);
+        assertThat(result.estimatedNetSalary()).isEqualTo(16740);
+        assertThat(result.netSalary()).isEqualTo(16680);
+        assertThat(result.lateAttendanceMinutes()).isEqualTo(0);
+        assertThat(result.lateAmount()).isEqualByComparingTo("0");
+        assertThat(result.permissionExcessMinutes()).isEqualTo(60);
+        assertThat(result.permissionExcessAmount()).isEqualByComparingTo("60");
+    }
+    @Test void permissionWhileAlreadyWorkingDoesNotCreditAnotherAbsence() {
+        records.remove(1); var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("11:00");
+        assertThat(calculate().netSalary()).isEqualTo(16200);
+    }
+    @Test void approvedPermissionWithoutAttendanceCreditsOnlyApprovedInterval() {
+        records.remove(0);
+        var leave = approval("Permission", 1); leave.setStartTime("10:00"); leave.setEndTime("11:00");
+        var result = calculate();
+        assertThat(result.permissionDurationMinutes()).isEqualTo(60);
+        assertThat(result.netSalary()).isEqualTo(16260);
+        assertThat(result.dailyRows().get(0).get("paidCreditMinutes")).isEqualTo(60);
+        assertThat(result.dailyRows().get(0).get("unpaidMissingMinutes")).isEqualTo(480);
+        assertThat(result.permissionExcessMinutes()).isEqualTo(480);
+        assertThat(result.attendanceDeduction()).isEqualByComparingTo("480");
+    }
+    @Test void missingSalaryRequiresReviewInsteadOfZeroPayroll() {
+        employee.setSalary(null);
+        assertThatThrownBy(this::calculate).isInstanceOf(IllegalStateException.class).hasMessageContaining("missing salary");
+    }
+    @Test void midMonthJoiningUsesFullMonthRateAndEligibleScheduleOnly() {
+        employee.setDateOfJoining("2026-08-16"); records.removeIf(r -> r.getTimeIn().getDayOfMonth() < 16);
+        var result = calculate();
+        assertThat(result.netSalary()).isEqualTo(8640);
+        assertThat(result.proratedBasic()).isEqualByComparingTo("8640");
+        assertThat(result.absentMinutes()).isZero();
+    }
+    @Test void incompleteAttendanceBecomesPendingAndDuplicateAttendanceUsesBestRecord() {
+        records.get(0).setTimeOut(null);
+        var pendingResult = calculate();
+        Map<String, Object> pendingRow = pendingResult.dailyRows().get(0);
+        assertThat(pendingRow.get("displayStatus")).isEqualTo("Pending");
+        assertThat(pendingRow.get("payrollPending")).isEqualTo(true);
+        assertThat(pendingRow.get("payableMinutes")).isEqualTo(0);
+        assertThat(pendingRow.get("payrollRemark")).isEqualTo("Time Out pending");
+
+        records.get(0).setTimeOut(records.get(0).getTimeIn().plusHours(9));
+        AttendanceRecord duplicate = attendanceFor(LocalDate.of(2026, 8, 1), true);
+        duplicate.setId(999L);
+        duplicate.setTimeIn(duplicate.getTimeIn().plusMinutes(30));
+        records.add(duplicate);
+        var duplicateResult = calculate();
+        Map<String, Object> duplicateRow = duplicateResult.dailyRows().get(0);
+        assertThat(duplicateRow.get("id")).isEqualTo(999L);
+        assertThat(duplicateRow.get("payableMinutes")).isEqualTo(510);
+        assertThat(duplicateRow.get("lateMinutes")).isEqualTo(30);
+    }
+    @Test void currentDayOpenPunchIsPendingAndDoesNotBlockDailyPayroll() {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Kolkata"));
+        records.clear();
+        for (int d = 1; d < today.getDayOfMonth(); d++) {
+            records.add(attendanceFor(today.withDayOfMonth(d), true));
+        }
+        records.add(attendanceFor(today, false));
+
+        var result = calculate(today.getMonthValue(), today.getYear());
+        Map<String, Object> todayRow = result.dailyRows().stream()
+                .filter(row -> today.equals(LocalDate.parse(String.valueOf(row.get("date")), DATE)))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(todayRow.get("displayStatus")).isEqualTo("Pending");
+        assertThat(todayRow.get("payrollPending")).isEqualTo(true);
+        assertThat(todayRow.get("payableMinutes")).isEqualTo(0);
+        assertThat(todayRow.get("dayEarnedAmount")).isEqualTo(BigDecimal.ZERO.setScale(2));
+        assertThat(todayRow.get("dailyEarnedSalary")).isEqualTo(BigDecimal.ZERO.setScale(2));
+        assertThat(todayRow.get("payrollRemark")).isEqualTo("Time Out pending");
+    }
+    @Test void tenantMismatchCannotCalculatePayroll() {
+        assertThatThrownBy(() -> service.calculateMonthlyPayroll(1L, 8, 2026, 2L)).isInstanceOf(IllegalArgumentException.class);
+    }
+    @Test void dailyCurrencyAmountsReconcileToMonthlyTotal() {
+        employee.setSalary(15000.0);
+        var result = calculate();
+        BigDecimal total = result.dailyRows().stream().map(r -> (BigDecimal) r.get("dayEarnedAmount")).reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(total).isEqualByComparingTo("15000");
+    }
+    @Test void dailyRowsExposePayrollDashboardAmountsAndRemarks() {
+        records.get(0).setTimeIn(records.get(0).getTimeIn().plusMinutes(20));
+        var request = new OvertimeRequest(); request.setDate("01/08/2026"); request.setOvertimeHours(0.5);
+        records.get(0).setTimeOut(records.get(0).getTimeOut().plusMinutes(30));
+        when(overtime.findByEmployeeIdAndStatus(1L, OvertimeRequestStatus.APPROVED)).thenReturn(List.of(request));
+
+        var result = calculate();
+        Map<String, Object> row = result.dailyRows().get(0);
+
+        assertThat(row.get("perDaySalaryAmount")).isInstanceOf(BigDecimal.class);
+        assertThat(row.get("lateDeductionAmount")).isEqualTo(new BigDecimal("20.00"));
+        assertThat(row.get("overtimeAmount")).isEqualTo(new BigDecimal("30.00"));
+        assertThat(row.get("dailyEarnedSalary")).isInstanceOf(BigDecimal.class);
+        assertThat(String.valueOf(row.get("payrollRemark"))).contains("20 min late", "30 min overtime");
+    }
+    @Test void overtimeIsCappedToApprovedMinutesAndNotIncludedTwiceInBasic() {
+        records.get(0).setTimeOut(records.get(0).getTimeOut().plusHours(1));
+        var request = new OvertimeRequest(); request.setDate("01/08/2026"); request.setOvertimeHours(0.5);
+        when(overtime.findByEmployeeIdAndStatus(1L, OvertimeRequestStatus.APPROVED)).thenReturn(List.of(request));
+        var result = calculate();
+        assertThat(result.netSalary()).isEqualTo(16740);
+        assertThat(result.overtimeAmount()).isEqualByComparingTo("30");
+        assertThat(result.overtimeHours()).isEqualTo(0.5);
+    }
+    @Test void recordedShiftSnapshotOverridesCurrentEmployeeShiftInDailyAndMonthlyTotals() {
+        var first = records.get(0); first.setExpectedShiftStart("10:00"); first.setExpectedShiftEnd("16:30");
+        first.setExpectedMinutes(390); first.setShiftSource("ADDITIONAL_WORKING_DAY"); first.setTimeOut(first.getTimeOut().withHour(16).withMinute(30));
+        var result = calculate();
+        assertThat(result.scheduledWorkingMinutes()).isEqualTo(16590);
+        assertThat(result.netSalary()).isEqualTo(16740);
+        assertThat(result.dailyRows().get(0).get("calculatedMissedMinutes")).isEqualTo(0);
+    }
+
+    @Test void scheduledDaysStayConsistentForMondayWeekOffAndAllWeekendShiftOverrides() {
+        employee.setWeekOff("Monday");
+        employee.setLeavePolicyType("WEEKOFF");
+
+        List<EmployeeAdditionalWorkingDay> weekendShifts = List.of(
+                additionalWorkingDay(AdditionalWorkingDayType.ODD_SATURDAY, "10:00", "19:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.EVEN_SATURDAY, "10:00", "19:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.ODD_SUNDAY, "09:30", "14:00"),
+                additionalWorkingDay(AdditionalWorkingDayType.EVEN_SUNDAY, "09:30", "14:00"));
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any()))
+                .thenReturn(Map.of(employee.getId(), weekendShifts));
+
+        PayrollCalculationService.PayrollResult result = calculate(10, 2026);
+
+        // October 2026 has four Mondays; every Saturday and Sunday is configured as a workday.
+        assertThat(result.scheduledWorkingDays()).isEqualTo(27);
+        assertThat(result.configuredWeekOffDays()).isEqualTo(4);
+    }
+
+    @Test void fullPublicHolidayIsExcludedFromScheduledDaysButRemainsPayable() {
+        employee.setWeekOff("Monday");
+        employee.setLeavePolicyType("WEEKOFF");
+        when(additionalWorkingDays.findUniqueEntitiesByEmployeeIds(any()))
+                .thenReturn(Map.of(employee.getId(), List.of(
+                        additionalWorkingDay(AdditionalWorkingDayType.ODD_SATURDAY, "10:00", "19:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.EVEN_SATURDAY, "10:00", "19:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.ODD_SUNDAY, "09:30", "14:00"),
+                        additionalWorkingDay(AdditionalWorkingDayType.EVEN_SUNDAY, "09:30", "14:00"))));
+        Holiday holiday = new Holiday();
+        holiday.setClientId(1L);
+        holiday.setHolidayDate(LocalDate.of(2026, 10, 2));
+        holiday.setHolidayName("Public Holiday");
+        holiday.setHolidayType("FULL");
+        holiday.setBranchScope("ALL");
+        when(holidays.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(any(), any()))
+                .thenReturn(List.of(holiday));
+
+        PayrollCalculationService.PayrollResult result = calculate(10, 2026);
+
+        assertThat(result.scheduledWorkingDays()).isEqualTo(26);
+        assertThat(result.publicHolidayDays()).isEqualTo(1.0);
+    }
+
+    private EmployeeAdditionalWorkingDay additionalWorkingDay(
+            AdditionalWorkingDayType dayType,
+            String timeIn,
+            String timeOut) {
+        EmployeeAdditionalWorkingDay day = new EmployeeAdditionalWorkingDay();
+        day.setEmployee(employee);
+        day.setDayType(dayType);
+        day.setTimeIn(timeIn);
+        day.setTimeOut(timeOut);
+        return day;
+    }
+}

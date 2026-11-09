@@ -70,9 +70,6 @@ public class PayrollController {
         Optional<Employee> employeeOpt = clientId == null
                 ? employeeRepository.findById(employeeId)
                 : employeeRepository.findByIdAndClientId(employeeId, clientId);
-        if (employeeOpt.isEmpty() && clientId != null) {
-            employeeOpt = employeeRepository.findById(employeeId);
-        }
         Employee employee = employeeOpt.orElse(null);
         if (employee == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Employee not found");
@@ -83,13 +80,8 @@ public class PayrollController {
         }
         double salary = employee.getSalary() == null ? 0.0 : employee.getSalary();
 
-        PayrollCalculationService.PayrollResult result;
-        try {
-            result = payrollCalculationService.calculateMonthlyPayroll(employeeId, month, year, clientId);
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            result = PayrollCalculationService.PayrollResult.empty();
-        }
+        PayrollCalculationService.PayrollResult result =
+                payrollCalculationService.calculateMonthlyPayroll(employeeId, month, year, clientId);
 
         int daysInMonth = result.daysInMonth();
         double holidayTotalDays = result.publicHolidayDays();
@@ -193,18 +185,41 @@ public class PayrollController {
 
         Map<String, Object> salaryCalculation = new HashMap<>();
         salaryCalculation.put("basicSalary", result.basicSalary());
+        salaryCalculation.put("earnedSalary", result.estimatedNetSalary());
         salaryCalculation.put("scheduledWorkingMinutes", result.scheduledWorkingMinutes());
         salaryCalculation.put("payableWorkingMinutes", result.payableWorkingMinutes());
         salaryCalculation.put("perMinuteRate", result.perMinuteRate());
         salaryCalculation.put("estimatedNetSalary", result.estimatedNetSalary());
+        salaryCalculation.put("lateAmount", result.lateAmount());
+        salaryCalculation.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
+        salaryCalculation.put("unpaidMissingAmount", result.attendanceDeduction());
+        salaryCalculation.put("lopAmount", result.attendanceDeduction());
+        salaryCalculation.put("permissionExcessMinutes", result.permissionExcessMinutes());
+        salaryCalculation.put("permissionExcessAmount", result.permissionExcessAmount());
 
         response.put("expectedAttendance", expectedAttendance);
         response.put("actualAttendance", actualAttendance);
         response.put("salaryCalculation", salaryCalculation);
+        response.put("dailyRows", result.dailyRows());
+        Map<String, Long> attendanceSummary = new HashMap<>();
+        attendanceSummary.put("total", (long) result.dailyRows().size());
+        Map<String, String> summaryStatuses = Map.of("present", "Present", "absent", "Absent", "weekOff", "Week Off", "holiday", "Holiday");
+        summaryStatuses.forEach((key, value) -> attendanceSummary.put(key,
+                result.dailyRows().stream().filter(row -> value.equals(row.get("countStatus"))).count()));
+        response.put("attendanceSummary", attendanceSummary);
+        response.put("overtimeAmount", result.overtimeAmount());
+        response.put("proratedBasic", result.proratedBasic());
+        response.put("lateAmount", result.lateAmount());
+        response.put("unpaidMissingMinutes", result.unpaidMissingMinutes());
+        response.put("attendanceDeduction", result.attendanceDeduction());
+        response.put("lopAmount", result.attendanceDeduction());
+        response.put("permissionExcessMinutes", result.permissionExcessMinutes());
+        response.put("permissionExcessAmount", result.permissionExcessAmount());
+        response.put("payrollStatus", java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.now(java.time.ZoneId.of("Asia/Kolkata")))
+                ? "Ready" : "Provisional");
         response.put("additionalWorkingDaysCount", result.additionalWorkingDays());
         if (debug) {
-            response.put("debugDays",
-                    payrollCalculationService.calculateMonthlyPayrollDebug(employeeId, month, year, clientId));
+            response.put("debugDays", result.dailyRows());
         }
 
         return ResponseEntity.ok(response);
@@ -215,8 +230,8 @@ public class PayrollController {
             @RequestParam("clientId") Long clientId,
             @RequestParam(value = "branch", required = false) String branch) {
         List<Employee> employees = branch == null || branch.isBlank()
-                ? employeeRepository.findByClientId(clientId)
-                : employeeRepository.findByClientIdAndBranchIgnoreCase(clientId, branch.trim());
+                ? employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE")
+                : employeeRepository.findByClientIdAndBranchIgnoreCaseAndEmploymentStatusIgnoreCase(clientId, branch.trim(), "ACTIVE");
         List<Map<String, Object>> response = employees.stream()
                 .map(employee -> {
                     Map<String, Object> item = new HashMap<>();
@@ -302,54 +317,8 @@ public class PayrollController {
                 : request.message;
 
         try {
-            List<PayslipPdfService.AllowanceItem> allowanceItems = request.additionalAllowances == null
-                    ? List.of()
-                    : request.additionalAllowances.stream()
-                            .map(item -> new PayslipPdfService.AllowanceItem(
-                                    item.name == null ? "" : item.name,
-                                    parseDouble(item.amount)))
-                            .collect(Collectors.toList());
-
-            PayslipPdfService.PayslipData payslipData = new PayslipPdfService.PayslipData(
-                    request.companyName == null ? "ZenTime" : request.companyName,
-                    request.employeeId,
-                    request.employeeName,
-                    request.position,
-                    request.branch,
-                    request.mobile,
-                    request.email,
-                    request.month,
-                    request.year,
-                    parseInt(request.totalDays),
-                    parseInt(request.scheduledDays),
-                    parseInt(request.weekOffDays),
-                    request.holidaysSummary,
-                    parseInt(request.workedDays),
-                    parseInt(request.absentDays),
-                    parseDouble(request.expectedHours),
-                    parseDouble(request.payableHours),
-                    parseDouble(request.overtimeHours),
-                    parseDouble(request.missingHours),
-                    parseDouble(request.basicSalary),
-                    parseDouble(request.netSalary),
-                    parseDouble(request.convenience),
-                    parseDouble(request.otAmount),
-                    parseDouble(request.pfAmount),
-                    parseDouble(request.lopAmount),
-                    parseDouble(request.incentives),
-                    parseDouble(request.advance),
-                    parseDouble(request.others),
-                    parseDouble(request.allowancesTotal),
-                    allowanceItems
-            );
-
-            PayrollLogoStorageService.LogoData logoData =
-                    payrollLogoStorageService.getLogo(request.clientId).orElse(null);
-
-            byte[] pdfBytes = payslipPdfService.generatePdf(payslipData, logoData);
-            String monthLabel = request.month <= 0 ? "month" : String.valueOf(request.month);
-            String fileName = "Payslip-" + (request.employeeId == null ? "employee" : request.employeeId)
-                    + "-" + request.year + "-" + monthLabel + ".pdf";
+            byte[] pdfBytes = generatePayslipPdf(request);
+            String fileName = payslipFileName(request);
             String result = emailService.sendEmailWithAttachment(
                     sender,
                     request.receiver,
@@ -361,7 +330,27 @@ public class PayrollController {
             return ResponseEntity.ok(Map.of("message", result));
         } catch (Exception ex) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Failed to generate/send payslip"));
+                    .body(Map.of("error", ex.getMessage() == null || ex.getMessage().isBlank()
+                            ? "Failed to generate/send payslip"
+                            : ex.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/preview-payslip", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<?> previewPayslip(@RequestBody PayslipEmailRequest request) {
+        if (request == null || request.clientId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "clientId is required"));
+        }
+
+        try {
+            byte[] pdfBytes = generatePayslipPdf(request);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_PDF)
+                    .header("Content-Disposition", "inline; filename=\"" + payslipFileName(request) + "\"")
+                    .body(pdfBytes);
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to generate payslip preview"));
         }
     }
 
@@ -420,6 +409,60 @@ public class PayrollController {
 
     private double parseDouble(Number number) {
         return number == null ? 0.0 : number.doubleValue();
+    }
+
+    private byte[] generatePayslipPdf(PayslipEmailRequest request) throws Exception {
+        List<PayslipPdfService.AllowanceItem> allowanceItems = request.additionalAllowances == null
+                ? List.of()
+                : request.additionalAllowances.stream()
+                        .map(item -> new PayslipPdfService.AllowanceItem(
+                                item.name == null ? "" : item.name,
+                                parseDouble(item.amount)))
+                        .collect(Collectors.toList());
+
+        PayslipPdfService.PayslipData payslipData = new PayslipPdfService.PayslipData(
+                request.companyName == null ? "ZenTime" : request.companyName,
+                request.employeeId,
+                request.employeeName,
+                request.position,
+                request.branch,
+                request.mobile,
+                request.email,
+                request.month,
+                request.year,
+                parseInt(request.totalDays),
+                parseInt(request.scheduledDays),
+                parseInt(request.weekOffDays),
+                request.holidaysSummary,
+                parseInt(request.workedDays),
+                parseInt(request.absentDays),
+                parseDouble(request.expectedHours),
+                parseDouble(request.payableHours),
+                parseDouble(request.overtimeHours),
+                parseDouble(request.missingHours),
+                parseDouble(request.basicSalary),
+                parseDouble(request.netSalary),
+                parseDouble(request.convenience),
+                parseDouble(request.otAmount),
+                parseDouble(request.pfAmount),
+                parseDouble(request.lopAmount),
+                parseDouble(request.incentives),
+                parseDouble(request.advance),
+                parseDouble(request.others),
+                parseDouble(request.allowancesTotal),
+                allowanceItems
+        );
+
+        PayrollLogoStorageService.LogoData logoData =
+                payrollLogoStorageService.getLogo(request.clientId).orElse(null);
+
+        return payslipPdfService.generatePdf(payslipData, logoData);
+    }
+
+    private String payslipFileName(PayslipEmailRequest request) {
+        String monthLabel = request.month <= 0 ? "month" : String.valueOf(request.month);
+        return "Payslip-" + (request.employeeId == null ? "employee" : request.employeeId)
+                + "-" + request.year + "-" + monthLabel + ".pdf";
     }
 
     public static class AllowanceRequest {

@@ -873,15 +873,15 @@ private List<Employee> resolveEmployeesForCalendar(Long clientId, Employee selec
         return List.of(selectedEmployee);
     }
     if (clientId != null && branch != null) {
-        return employeeRepository.findByClientIdAndBranchIgnoreCase(clientId, branch);
+        return employeeRepository.findByClientIdAndBranchIgnoreCaseAndEmploymentStatusIgnoreCase(clientId, branch, "ACTIVE");
     }
     if (clientId != null) {
-        return employeeRepository.findByClientId(clientId);
+        return employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE");
     }
     if (branch != null) {
-        return employeeRepository.findByBranchIgnoreCase(branch);
+        return employeeRepository.findByBranchIgnoreCaseAndEmploymentStatusIgnoreCase(branch, "ACTIVE");
     }
-    return employeeRepository.findAll();
+    return employeeRepository.findByEmploymentStatusIgnoreCase("ACTIVE");
 }
 
 private Map<String, Object> toEmployeeMap(Employee employeeSource) {

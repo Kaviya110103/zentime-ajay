@@ -1,0 +1,60 @@
+name: Deploy Admin to GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - qa-testing
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and Deploy Admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      REACT_APP_API_BASE_URL: https://iie.zentime.co.in
+      CI: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+
+      - name: Install admin dependencies
+        working-directory: admin
+        run: npm ci
+
+      - name: Build admin frontend
+        working-directory: admin
+        run: npm run build
+
+      - name: Prepare GitHub Pages package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf pages-dist
+          cp -R admin/build/. pages-dist/
+          cp admin/build/index.html pages-dist/404.html
+          echo "iieadmin.zentime.co.in" > pages-dist/CNAME
+          touch pages-dist/.nojekyll
+
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./pages-dist
+          publish_branch: gh-pages
+          force_orphan: true

@@ -18,12 +18,23 @@ import {
 } from "@mui/material";
 import { DatePicker, LocalizationProvider } from "@mui/x-date-pickers";
 import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
-import { addDays, addMonths, endOfMonth, endOfWeek, format, isSameMonth, parseISO, startOfMonth, startOfWeek } from "date-fns";
+import { addDays, addMonths, endOfMonth, endOfWeek, format, isSameMonth, isValid, parseISO, startOfMonth, startOfWeek } from "date-fns";
 import "./HolidayCalendar.css";
 import { API_BASE_URL } from "../config/api";
 import { fetchBranchesFromLocationSet } from "../utils/branchSource";
 
 const FALLBACK_ORIGIN = API_BASE_URL;
+
+const parseHolidayDate = (value) => {
+  if (!value) return null;
+  const parsed = parseISO(value);
+  return isValid(parsed) ? parsed : null;
+};
+
+const formatHolidayDate = (value) => {
+  const parsed = parseHolidayDate(value);
+  return parsed ? format(parsed, "dd/MM/yyyy") : "-";
+};
 
 export default function HolidayCalendar() {
   const client = JSON.parse(localStorage.getItem("loggedInClient") || "null");
@@ -38,6 +49,7 @@ export default function HolidayCalendar() {
   const [editingHoliday, setEditingHoliday] = useState(null);
   const [form, setForm] = useState({
     holidayDate: "",
+    holidayEndDate: "",
     holidayName: "",
     holidayType: "FULL",
     branchScope: "ALL",
@@ -48,15 +60,11 @@ export default function HolidayCalendar() {
     severity: "success",
   });
 
-  const holidaysByDate = useMemo(() => {
-    const map = new Map();
-    holidays.forEach((holiday) => {
-      if (holiday?.holidayDate) {
-        map.set(holiday.holidayDate, holiday);
-      }
-    });
-    return map;
-  }, [holidays]);
+  const holidayForDate = (dateKey) => holidays.find((holiday) => {
+    if (!holiday?.holidayDate) return false;
+    const endDate = holiday.holidayEndDate || holiday.holidayDate;
+    return holiday.holidayDate <= dateKey && dateKey <= endDate;
+  });
 
   const apiBase = tenantOrigin || FALLBACK_ORIGIN;
   const buildUrl = (path) => `${apiBase}${path.startsWith("/") ? path : `/${path}`}`;
@@ -127,12 +135,13 @@ export default function HolidayCalendar() {
 
   const openDialogForDate = (date) => {
     const dateKey = format(date, "yyyy-MM-dd");
-    const existing = holidaysByDate.get(dateKey);
+    const existing = holidayForDate(dateKey);
     setSelectedDate(date);
     if (existing) {
       setEditingHoliday(existing);
       setForm({
         holidayDate: existing.holidayDate,
+        holidayEndDate: existing.holidayEndDate || existing.holidayDate,
         holidayName: existing.holidayName || "",
         holidayType: existing.holidayType || "FULL",
         branchScope: existing.branchScope || "ALL",
@@ -141,6 +150,7 @@ export default function HolidayCalendar() {
       setEditingHoliday(null);
       setForm({
         holidayDate: dateKey,
+        holidayEndDate: dateKey,
         holidayName: "",
         holidayType: "FULL",
         branchScope: "ALL",
@@ -154,6 +164,7 @@ export default function HolidayCalendar() {
     setEditingHoliday(null);
     setForm({
       holidayDate: "",
+      holidayEndDate: "",
       holidayName: "",
       holidayType: "FULL",
       branchScope: "ALL",
@@ -161,7 +172,7 @@ export default function HolidayCalendar() {
   };
 
   const formattedSelectedDate = form.holidayDate
-    ? format(parseISO(form.holidayDate), "dd-MM-yyyy")
+    ? formatHolidayDate(form.holidayDate)
     : "";
 
   const handleSave = async () => {
@@ -169,14 +180,19 @@ export default function HolidayCalendar() {
       showSnackbar("Client context missing.", "error");
       return;
     }
-    if (!form.holidayDate || !form.holidayName.trim()) {
-      showSnackbar("Holiday name is required.", "error");
+    if (!form.holidayDate || !form.holidayEndDate || !form.holidayName.trim()) {
+      showSnackbar("From date, to date, and holiday name are required.", "error");
+      return;
+    }
+    if (form.holidayEndDate < form.holidayDate) {
+      showSnackbar("To date must be on or after the from date.", "error");
       return;
     }
 
     const payload = {
       clientId: client.id,
       holidayDate: form.holidayDate,
+      holidayEndDate: form.holidayEndDate,
       holidayName: form.holidayName.trim(),
       holidayType: form.holidayType,
       branchScope: form.branchScope || "ALL",
@@ -254,7 +270,7 @@ export default function HolidayCalendar() {
         const formattedDate = format(cellDate, "d");
         const dateKey = format(cellDate, "yyyy-MM-dd");
         const inMonth = isSameMonth(cellDate, monthStart);
-        const holiday = holidaysByDate.get(dateKey);
+        const holiday = holidayForDate(dateKey);
 
         days.push(
           <div
@@ -335,7 +351,8 @@ export default function HolidayCalendar() {
         ) : (
           <div className="holiday-calendar-list-table">
             <div className="holiday-calendar-list-header">
-              <span>Date</span>
+              <span>From</span>
+              <span>To</span>
               <span>Holiday Name</span>
               <span>Type</span>
               <span>Branch</span>
@@ -343,7 +360,8 @@ export default function HolidayCalendar() {
             </div>
             {monthHolidayList.map((holiday) => (
               <div className="holiday-calendar-list-row" key={holiday.id}>
-                <span>{format(new Date(holiday.holidayDate), "dd-MM-yyyy")}</span>
+                <span>{formatHolidayDate(holiday.holidayDate)}</span>
+                <span>{formatHolidayDate(holiday.holidayEndDate || holiday.holidayDate)}</span>
                 <span>{holiday.holidayName}</span>
                 <span>{holiday.holidayType === "HALF" ? "Half Day" : "Full Day"}</span>
                 <span>{holiday.branchScope && holiday.branchScope !== "ALL" ? holiday.branchScope : "All Branches"}</span>
@@ -367,20 +385,45 @@ export default function HolidayCalendar() {
         <DialogContent className="holiday-dialog-content">
           <LocalizationProvider dateAdapter={AdapterDateFns}>
             <DatePicker
-              label="Holiday Date"
-              value={form.holidayDate ? parseISO(form.holidayDate) : null}
-              onChange={(value) =>
+              label="From Date"
+              format="dd/MM/yyyy"
+              value={parseHolidayDate(form.holidayDate)}
+              onChange={(value) => {
+                if (value && !isValid(value)) return;
+                const dateKey = value ? format(value, "yyyy-MM-dd") : "";
                 setForm((prev) => ({
                   ...prev,
-                  holidayDate: value ? format(value, "yyyy-MM-dd") : "",
-                }))
-              }
+                  holidayDate: dateKey,
+                  holidayEndDate: dateKey && (!prev.holidayEndDate || prev.holidayEndDate < dateKey)
+                    ? dateKey
+                    : prev.holidayEndDate,
+                }));
+              }}
               slotProps={{
                 textField: {
                   fullWidth: true,
                   margin: "dense",
                   helperText: formattedSelectedDate ? `Selected: ${formattedSelectedDate}` : "Select a date",
-                  InputProps: { readOnly: true },
+                },
+              }}
+            />
+            <DatePicker
+              label="To Date"
+              format="dd/MM/yyyy"
+              value={parseHolidayDate(form.holidayEndDate)}
+              minDate={parseHolidayDate(form.holidayDate) || undefined}
+              onChange={(value) => {
+                if (value && !isValid(value)) return;
+                setForm((prev) => ({
+                  ...prev,
+                  holidayEndDate: value ? format(value, "yyyy-MM-dd") : "",
+                }));
+              }}
+              slotProps={{
+                textField: {
+                  fullWidth: true,
+                  margin: "dense",
+                  helperText: form.holidayEndDate ? `Selected: ${formatHolidayDate(form.holidayEndDate)}` : "Select an end date",
                 },
               }}
             />

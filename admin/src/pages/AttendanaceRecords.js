@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { format, parseISO, isValid, parse } from "date-fns";
-import * as XLSX from "xlsx/dist/xlsx.mini.min";
+import * as XLSX from "xlsx-js-style";
 import {
   Box,
   Button,
@@ -21,6 +22,7 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
   Alert,
   Chip,
   Divider,
@@ -50,6 +52,9 @@ import BusinessOutlinedIcon from "@mui/icons-material/BusinessOutlined";
 import { API_BASE_URL, fetchWithTimeout } from "../config/api";
 
 function AttendanceFilters() {
+  const [searchParams] = useSearchParams();
+  const archivedEmployeeId = String(searchParams.get("employeeId") || "").trim();
+  const archivedEmployeeName = String(searchParams.get("employeeName") || "").trim();
   const client = JSON.parse(localStorage.getItem("loggedInClient"));
   const clientId = client?.id;
   const baseOrigin = API_BASE_URL;
@@ -64,6 +69,8 @@ function AttendanceFilters() {
   const [weekOffCount, setWeekOffCount] = useState(0);
   const [holidayCount, setHolidayCount] = useState(0);
   const [lateCount, setLateCount] = useState(0);
+  const [tablePage, setTablePage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(50);
   const [employeeSummaryModalOpen, setEmployeeSummaryModalOpen] = useState(false);
   const [todayStatus, setTodayStatus] = useState(null);
   const tableRef = useRef(null);
@@ -92,7 +99,7 @@ function AttendanceFilters() {
   const actionShortcutArmedRef = useRef(false);
 
   const [filters, setFilters] = useState({
-    employeeId: "",
+    employeeId: archivedEmployeeId,
     branch: "",
     startDate: null,
     endDate: null,
@@ -183,6 +190,16 @@ function AttendanceFilters() {
     return null;
   }, [filters.month, filters.year]);
 
+  const visibleRecords = useMemo(() => {
+    const start = tablePage * rowsPerPage;
+    return records.slice(start, start + rowsPerPage);
+  }, [records, rowsPerPage, tablePage]);
+
+  useEffect(() => {
+    const lastPage = Math.max(0, Math.ceil(records.length / rowsPerPage) - 1);
+    setTablePage((currentPage) => Math.min(currentPage, lastPage));
+  }, [records.length, rowsPerPage]);
+
   const handleMonthYearChange = (date) => {
     if (!date || !isValid(date)) {
       setFilters((prev) => ({
@@ -271,19 +288,7 @@ function AttendanceFilters() {
   };
 
   const getComputedMissedMinutes = (record) => {
-    const hasLateMinutes = record?.lateMinutes != null && Number.isFinite(Number(record.lateMinutes));
-    const hasEarlyOutMinutes = record?.earlyOutMinutes != null && Number.isFinite(Number(record.earlyOutMinutes));
-    if (hasLateMinutes || hasEarlyOutMinutes) {
-      return Math.max(
-        0,
-        (hasLateMinutes ? Number(record.lateMinutes) : 0) +
-          (hasEarlyOutMinutes ? Number(record.earlyOutMinutes) : 0)
-      );
-    }
-    if (record?.calculatedMissedMinutes != null && Number.isFinite(Number(record.calculatedMissedMinutes))) {
-      return Math.max(0, Number(record.calculatedMissedMinutes));
-    }
-    return Number(record?.missedTimes || 0);
+    return record?.reviewRequired ? "Review Required" : record?.calculatedMissedMinutes ?? "-";
   };
 
   const getDerivedStatus = (record) => {
@@ -535,10 +540,17 @@ function AttendanceFilters() {
         });
       });
 
+    if (archivedEmployeeId && !unique.has(archivedEmployeeId)) {
+      unique.set(archivedEmployeeId, {
+        value: archivedEmployeeId,
+        label: `${archivedEmployeeName || `Employee ${archivedEmployeeId}`} (Archived)`,
+      });
+    }
+
     return Array.from(unique.values()).sort((left, right) =>
       left.label.localeCompare(right.label)
     );
-  }, [employeeDirectory, filters.branch]);
+  }, [employeeDirectory, filters.branch, archivedEmployeeId, archivedEmployeeName]);
 
   const branchOptions = useMemo(() => {
     const unique = new Map();
@@ -741,6 +753,7 @@ function AttendanceFilters() {
 
       if (response.status === 404) {
         setRecords([]);
+        setTablePage(0);
         updateSummaryCounts([]);
         if (showSuccess) {
           setSuccess("No records found.");
@@ -770,6 +783,7 @@ function AttendanceFilters() {
       const sortedRecords = sortRecords(filteredRecords);
       const statusFilteredRecords = enrichRecordsWithEmployeeDetails(sortedRecords);
       setRecords(statusFilteredRecords);
+      setTablePage(0);
       updateSummaryCounts(statusFilteredRecords);
 
       const present = statusFilteredRecords.filter((record) => getRecordStatusBucket(record) === "Present").length;
@@ -826,73 +840,71 @@ function AttendanceFilters() {
     const headers = [
       "Date",
       "Day",
-      "Employee Name",
-      "Employee Code",
-      "Branch",
+      "Employee",
       "Status",
       "Time In",
       "Time Out",
-      "Worked Minutes",
       "Working Hours",
-      "Late Minutes",
-      "Early Out Minutes",
-      "Missed Minutes",
-      "Shift Start",
-      "Shift End",
-      "Expected Minutes",
+      "Late Arrival",
+      "Missed Times",
       "Location",
-      "Week Off",
-      "Holiday",
-      "Additional Working Day",
     ];
 
-    const parseBusinessDateForExcel = (value) => {
-      if (!value) return "";
-      const text = String(value).trim();
-
-      let match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (match) {
-        const [, year, month, day] = match;
-        return new Date(Number(year), Number(month) - 1, Number(day));
-      }
-
-      match = text.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
-      if (match) {
-        const [, day, month, year] = match;
-        return new Date(Number(year), Number(month) - 1, Number(day));
-      }
-
-      const parsed = parseRecordDate(text);
-      if (!parsed) return text;
-      return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
-    };
-
     const rows = records.map((record) => [
-      parseBusinessDateForExcel(record.date),
+      safeFormatDate(record.date, "dd MMM yyyy"),
       formatDayName(record.date),
       record.employee
         ? `${record.employee.firstName} ${record.employee.lastName || ""}`
         : "-",
-      record.employee?.employeeCode || "-",
-      record.employee?.branch || "-",
       getDerivedStatus(record),
       formatTime(record.timeIn),
       formatTime(record.timeOut),
-      record.workedMinutes ?? "",
       formatWorkingHoursFromMinutes(record.workedMinutes),
-      getLateArrivalMinutes(record),
-      record.earlyOutMinutes ?? 0,
-      getComputedMissedMinutes(record),
-      record.expectedShiftStart || "",
-      record.expectedShiftEnd || "",
-      record.expectedMinutes ?? "",
+      getLateArrivalMinutes(record) > 0 ? `${getLateArrivalMinutes(record)} min` : "-",
+      record.reviewRequired ? "Review Required" : `${getComputedMissedMinutes(record)} min`,
       record.location || "-",
-      record.weekOff ? "Yes" : "No",
-      record.holiday ? "Yes" : "No",
-      record.additionalWorkingDay ? "Yes" : "No",
     ]);
 
-    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const summary = {
+      total: records.length,
+      present: records.filter((record) => getRecordStatusBucket(record) === "Present").length,
+      absent: records.filter((record) => getRecordStatusBucket(record) === "Absent").length,
+      weekOff: records.filter((record) => getRecordStatusBucket(record) === "Week Off").length,
+      holiday: records.filter((record) => getRecordStatusBucket(record) === "Holiday").length,
+    };
+
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      ["Attendance Records Summary"],
+      [],
+      ["Total Records", "Present", "Absent", "Week Off", "Holiday"],
+      [
+        String(summary.total),
+        String(summary.present),
+        String(summary.absent),
+        String(summary.weekOff),
+        String(summary.holiday),
+      ],
+      [],
+      headers,
+      ...rows,
+    ]);
+    worksheet["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+    ];
+    const leftAlignedSummaryStyle = {
+      alignment: { horizontal: "left", vertical: "center" },
+    };
+    worksheet["A1"].s = leftAlignedSummaryStyle;
+    for (let column = 0; column < 5; column += 1) {
+      const labelCell = XLSX.utils.encode_cell({ r: 2, c: column });
+      const valueCell = XLSX.utils.encode_cell({ r: 3, c: column });
+      worksheet[labelCell].s = leftAlignedSummaryStyle;
+      // Keep count values as text so spreadsheet apps cannot force numeric right alignment.
+      worksheet[valueCell].t = "s";
+      worksheet[valueCell].s = {
+        alignment: { horizontal: "center", vertical: "center" },
+      };
+    }
     worksheet["!cols"] = [
       { wch: 15 },
       { wch: 12 },
@@ -902,27 +914,9 @@ function AttendanceFilters() {
       { wch: 15 },
       { wch: 12 },
       { wch: 12 },
-      { wch: 16 },
-      { wch: 15 },
-      { wch: 15 },
-      { wch: 16 },
-      { wch: 15 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 16 },
+      { wch: 18 },
       { wch: 25 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 22 },
     ];
-
-    rows.forEach((row, index) => {
-      if (row[0] instanceof Date) {
-        const cellAddress = XLSX.utils.encode_cell({ r: index + 1, c: 0 });
-        worksheet[cellAddress].t = "d";
-        worksheet[cellAddress].z = "dd-mmm-yyyy";
-      }
-    });
 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance Records");
@@ -1021,7 +1015,7 @@ function AttendanceFilters() {
 
   useEffect(() => {
     const raw = String(filters.employeeId || "").trim();
-    if (!raw || !filters.branch) return;
+    if (!raw || !filters.branch || raw === archivedEmployeeId) return;
 
     const lowered = raw.toLowerCase();
     const selectedEmployee =
@@ -1032,7 +1026,7 @@ function AttendanceFilters() {
     if (selectedEmployee && !employeeMatchesSelectedBranch(selectedEmployee, filters.branch)) {
       setFilters((prev) => ({ ...prev, employeeId: "" }));
     }
-  }, [filters.branch, filters.employeeId, employeeDirectoryIndex]);
+  }, [filters.branch, filters.employeeId, employeeDirectoryIndex, archivedEmployeeId]);
 
   const openEditDialog = (record) => {
     if (!record || record.__synthetic) return;
@@ -1903,6 +1897,7 @@ function AttendanceFilters() {
                 </Typography>
               </Paper>
             ) : (
+              <>
               <TableContainer component={Paper} elevation={0}>
                 <Table
                   sx={{
@@ -1932,7 +1927,7 @@ function AttendanceFilters() {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {records.map((record) => {
+                    {visibleRecords.map((record) => {
                       const derivedStatus = getDerivedStatus(record);
                       const statusBucket = getRecordStatusBucket(record);
                       const displayStatus = derivedStatus || statusBucket;
@@ -1993,7 +1988,7 @@ function AttendanceFilters() {
                         </TableCell>
                         <TableCell>
                           <Chip
-                            label={`${missedMinutes} min`}
+                            label={record.reviewRequired ? "Review Required" : `${missedMinutes} min`}
                             color={missedMinutes > 0 ? "error" : "success"}
                             size="small"
                             variant="outlined"
@@ -2033,6 +2028,20 @@ function AttendanceFilters() {
                   </TableBody>
                 </Table>
               </TableContainer>
+              <TablePagination
+                component="div"
+                count={records.length}
+                page={tablePage}
+                onPageChange={(_, nextPage) => setTablePage(nextPage)}
+                rowsPerPage={rowsPerPage}
+                onRowsPerPageChange={(event) => {
+                  setRowsPerPage(Number(event.target.value));
+                  setTablePage(0);
+                }}
+                rowsPerPageOptions={[25, 50, 100]}
+                labelRowsPerPage="Rows per page"
+              />
+              </>
             )}
           </CardContent>
         </Card>

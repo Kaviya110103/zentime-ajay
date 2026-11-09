@@ -7,7 +7,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://iie.zentime.co.in"
+        "EXPO_PUBLIC_API_BASE_URL": "http://10.224.61.162:5001"
       }
     },
     "preview": {
@@ -21,7 +21,7 @@
         "EXPO_PUBLIC_API_BASE_URL": "https://iie.zentime.co.in"
       },
       "android": {
-        "buildType": "apk"
+        "buildType": "app-bundle"
       }
     }
   },

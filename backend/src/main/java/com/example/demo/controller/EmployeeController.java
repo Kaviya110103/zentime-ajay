@@ -107,7 +107,7 @@ public class EmployeeController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().build();
         }
-        long currentEmployeeCount = employeeRepository.countByClientId(employee.getClientId());
+        long currentEmployeeCount = employeeRepository.countByClientIdAndEmploymentStatusIgnoreCase(employee.getClientId(), "ACTIVE");
         if (employeeLimit != null && employeeLimit > 0 && currentEmployeeCount >= employeeLimit) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(EMPLOYEE_LIMIT_EXCEEDED_MESSAGE);
         }
@@ -121,6 +121,24 @@ public class EmployeeController {
             return ResponseEntity.badRequest().build();
         }
         employee.setCompanyCode(companyCode);
+
+        String requestedEmail = employee.getEmail() == null ? "" : employee.getEmail().trim().toLowerCase();
+        if (requestedEmail.isBlank()) {
+            return ResponseEntity.badRequest().body("Email is required");
+        }
+        if (employeeRepository.findFirstByEmailIgnoreCase(requestedEmail).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("Email already exists");
+        }
+        employee.setEmail(requestedEmail);
+
+        String requestedUsername = employee.getUsername() == null ? "" : employee.getUsername().trim();
+        if (requestedUsername.isBlank()) {
+            return ResponseEntity.badRequest().body("Username is required");
+        }
+        if (employeeRepository.findFirstByUsernameIgnoreCase(requestedUsername).isPresent()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body("Username already exists");
+        }
+        employee.setUsername(requestedUsername);
 
         if (employee.getEmployeeCode() != null && !employee.getEmployeeCode().isBlank()) {
             String normalizedCode = employee.getEmployeeCode().trim().toUpperCase();
@@ -200,8 +218,12 @@ public class EmployeeController {
         );
 
         emailDetails.setMessage(message);
-        String emailResponse = emailService.sendEmail(emailDetails);
-        logger.info(emailResponse);
+        try {
+            String emailResponse = emailService.sendEmail(emailDetails);
+            logger.info(emailResponse);
+        } catch (Exception mailEx) {
+            logger.warn("Employee credential email failed for employeeId={}: {}", createdEmployee.getId(), mailEx.getMessage());
+        }
 
         return ResponseEntity.ok(createdEmployee);
     }
@@ -361,8 +383,8 @@ public class EmployeeController {
         Long effectiveClientId = resolveClientId(clientId, headerClientId);
         try {
             long count = effectiveClientId != null
-                    ? employeeRepository.countByClientId(effectiveClientId)
-                    : employeeRepository.count();
+                    ? employeeRepository.countByClientIdAndEmploymentStatusIgnoreCase(effectiveClientId, "ACTIVE")
+                    : employeeRepository.countByEmploymentStatusIgnoreCase("ACTIVE");
             return ResponseEntity.ok(Map.of("count", count));
         } catch (Exception ex) {
             logger.warn("Failed to count employees for clientId={}", effectiveClientId, ex);
@@ -374,14 +396,16 @@ public class EmployeeController {
     @GetMapping
     public ResponseEntity<List<Employee>> getAllEmployees(
             @RequestParam(value = "clientId", required = false) Long clientId,
+            @RequestParam(value = "status", required = false) String status,
             @RequestHeader(value = "X-Client-Id", required = false) Long headerClientId) {
         Long effectiveClientId = resolveClientId(clientId, headerClientId);
+        String requestedStatus = "ARCHIVED".equalsIgnoreCase(status) ? "ARCHIVED" : "ACTIVE";
         try {
             schemaMaintenanceService.ensureEmployeeSchema();
             if (effectiveClientId != null) {
-                return ResponseEntity.ok(employeeService.getEmployeesByClientId(effectiveClientId));
+                return ResponseEntity.ok(employeeService.getEmployeesByClientIdAndStatus(effectiveClientId, requestedStatus));
             }
-            return ResponseEntity.ok(employeeService.getAllEmployees());
+            return ResponseEntity.ok(employeeService.getEmployeesByStatus(requestedStatus));
         } catch (Exception ex) {
             logger.warn("Failed to load employees for clientId={}", effectiveClientId, ex);
             return ResponseEntity.ok(List.of());
@@ -701,6 +725,40 @@ public class EmployeeController {
     }
 
     // Delete Employee by ID
+    @PutMapping("/{id}/archive")
+    public ResponseEntity<Object> archiveEmployeeById(
+            @PathVariable Long id,
+            @RequestParam(value = "clientId", required = false) Long clientId,
+            @RequestHeader(value = "X-Client-Id", required = false) Long headerClientId) {
+        Long effectiveClientId = resolveClientId(clientId, headerClientId);
+        String tenantDb = resolveTenantDbByClientId(effectiveClientId);
+        if (tenantDb != null && !tenantDb.isBlank()) {
+            TenantContext.setTenantDb(tenantDb);
+        }
+
+        try {
+            schemaMaintenanceService.ensureEmployeeSchema();
+            Optional<Employee> employeeOptional = effectiveClientId != null
+                    ? employeeRepository.findByIdAndClientId(id, effectiveClientId)
+                    : employeeRepository.findById(id);
+            if (employeeOptional.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+
+            Employee employee = employeeOptional.get();
+            employee.setEmploymentStatus("ARCHIVED");
+            Employee archivedEmployee = employeeRepository.save(employee);
+            mirrorEmployeeProfileToMaster(archivedEmployee);
+            return ResponseEntity.ok(archivedEmployee);
+        } catch (Exception ex) {
+            logger.error("Unable to archive employeeId={}", id, ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Unable to archive employee");
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Object> deleteEmployeeById(
             @PathVariable Long id,
@@ -854,6 +912,10 @@ public class EmployeeController {
 
             if (employeeOptional.isPresent()) {
                 Employee employee = employeeOptional.get();
+                if ("ARCHIVED".equalsIgnoreCase(employee.getEmploymentStatus())) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body(Map.of("error", "This employee has been archived"));
+                }
                 String storedPassword = employee.getPassword();
                 boolean hashMatch = storedPassword != null && passwordEncoder.matches(rawPassword, storedPassword);
                 boolean plainMatch = storedPassword != null && rawPassword.equals(storedPassword);
@@ -932,6 +994,7 @@ public class EmployeeController {
         response.setGuestName(employee.getGuestName());
         response.setGuestStartDate(employee.getGuestStartDate());
         response.setClientId(employee.getClientId());
+        response.setEmploymentStatus(employee.getEmploymentStatus());
         return ResponseEntity.ok(response);
     }
 
@@ -1061,7 +1124,7 @@ public class EmployeeController {
     // Additional endpoint to get employees by client ID - FIXED SYNTAX
     @GetMapping("/client/{clientId}")
     public ResponseEntity<List<Employee>> getEmployeesByClientId(@PathVariable Long clientId) {
-        List<Employee> employees = employeeRepository.findByClientId(clientId);
+        List<Employee> employees = employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE");
         return ResponseEntity.ok(employees);
     }
 
@@ -1206,22 +1269,6 @@ public class EmployeeController {
             return;
         }
 
-        // Snapshot additional days before switching tenant context. This avoids
-        // accidental data loss when source and master resolve to the same managed entity.
-        List<EmployeeAdditionalWorkingDay> additionalDaysSnapshot = new ArrayList<>();
-        if (sourceEmployee.getAdditionalWorkingDays() != null) {
-            for (EmployeeAdditionalWorkingDay sourceDay : sourceEmployee.getAdditionalWorkingDays()) {
-                if (sourceDay == null) {
-                    continue;
-                }
-                EmployeeAdditionalWorkingDay copiedDay = new EmployeeAdditionalWorkingDay();
-                copiedDay.setDayType(sourceDay.getDayType());
-                copiedDay.setTimeIn(sourceDay.getTimeIn());
-                copiedDay.setTimeOut(sourceDay.getTimeOut());
-                additionalDaysSnapshot.add(copiedDay);
-            }
-        }
-
         String currentTenantDb = TenantContext.getTenantDb();
         try {
             TenantContext.clear();
@@ -1268,16 +1315,7 @@ public class EmployeeController {
             masterEmployee.setCompanyCode(sourceEmployee.getCompanyCode());
             masterEmployee.setEmployeeCode(sourceEmployee.getEmployeeCode());
             masterEmployee.setClientId(sourceEmployee.getClientId());
-
-            if (masterEmployee.getAdditionalWorkingDays() == null) {
-                masterEmployee.setAdditionalWorkingDays(new ArrayList<>());
-            } else {
-                masterEmployee.getAdditionalWorkingDays().clear();
-            }
-            for (EmployeeAdditionalWorkingDay copiedDay : additionalDaysSnapshot) {
-                copiedDay.setEmployee(masterEmployee);
-                masterEmployee.getAdditionalWorkingDays().add(copiedDay);
-            }
+            masterEmployee.setEmploymentStatus(sourceEmployee.getEmploymentStatus());
 
             employeeRepository.save(masterEmployee);
             logger.info("Mirrored profile to master for employeeId={}", masterEmployee.getId());

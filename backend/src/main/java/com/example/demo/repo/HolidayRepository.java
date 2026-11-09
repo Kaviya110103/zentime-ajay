@@ -22,4 +22,8 @@ public interface HolidayRepository extends JpaRepository<Holiday, Long> {
             Long clientId,
             LocalDate startDate,
             LocalDate endDate);
+
+    List<Holiday> findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(
+            Long clientId,
+            LocalDate endDate);
 }

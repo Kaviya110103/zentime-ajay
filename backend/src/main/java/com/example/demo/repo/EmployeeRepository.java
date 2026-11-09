@@ -7,8 +7,11 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import jakarta.persistence.LockModeType;
 
 import com.example.demo.MODELS.Employee;
 
@@ -20,8 +23,13 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
     Optional<Employee> findByUsernameIgnoreCaseAndIdNot(String username, Long id);
     Optional<Employee> findByEmployeeCode(String employeeCode);
     Optional<Employee> findByEmail(String email);
+    Optional<Employee> findFirstByEmailIgnoreCase(String email);
     Optional<Employee> findByEmailIgnoreCaseAndIdNot(String email, Long id);
     Optional<Employee> findByIdAndClientId(Long id, Long clientId);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT e FROM Employee e WHERE e.id = :employeeId")
+    Optional<Employee> findByIdForUpdate(@Param("employeeId") Long employeeId);
 
      Optional<Employee> findByUsernameAndPassword(String username, String password);
 
@@ -30,9 +38,15 @@ public interface EmployeeRepository extends JpaRepository<Employee, Long> {
         //  List<Employee> findByBranch(String branchName);
 List<Employee> findByGuestNameIsNotNullAndGuestStartDateBefore(LocalDateTime cutoffTime);
 List<Employee> findByClientId(Long clientId);
+List<Employee> findByEmploymentStatusIgnoreCase(String employmentStatus);
+List<Employee> findByClientIdAndEmploymentStatusIgnoreCase(Long clientId, String employmentStatus);
+List<Employee> findByClientIdAndBranchIgnoreCaseAndEmploymentStatusIgnoreCase(Long clientId, String branch, String employmentStatus);
 List<Employee> findByClientIdAndBranchIgnoreCase(Long clientId, String branch);
+List<Employee> findByBranchIgnoreCaseAndEmploymentStatusIgnoreCase(String branch, String employmentStatus);
 List<Employee> findByCompanyCode(String companyCode);
 long countByClientId(Long clientId);
+long countByEmploymentStatusIgnoreCase(String employmentStatus);
+long countByClientIdAndEmploymentStatusIgnoreCase(Long clientId, String employmentStatus);
 long countByClientIdAndBranchIgnoreCase(Long clientId, String branch);
 long countByBranchIgnoreCase(String branch);
 
@@ -40,6 +54,7 @@ long countByBranchIgnoreCase(String branch);
        "e.shiftStartTime, e.shiftEndTime, e.shiftStart, e.shiftEnd, e.leavePolicyType " +
        "FROM Employee e " +
        "WHERE (:clientId IS NULL OR e.clientId = :clientId) " +
+       "AND UPPER(COALESCE(e.employmentStatus, 'ACTIVE')) = 'ACTIVE' " +
        "AND (:branch IS NULL OR LOWER(TRIM(e.branch)) = :branch)")
 List<Object[]> findDashboardEmployeeRows(
         @Param("clientId") Long clientId,

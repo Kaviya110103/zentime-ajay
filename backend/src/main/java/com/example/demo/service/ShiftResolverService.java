@@ -41,9 +41,8 @@ public class ShiftResolverService {
         List<Holiday> holidays = List.of();
         Long effectiveClientId = clientId != null ? clientId : employee == null ? null : employee.getClientId();
         if (effectiveClientId != null && date != null) {
-            holidays = holidayRepository.findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(
+            holidays = holidayRepository.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(
                     effectiveClientId,
-                    date,
                     date);
         }
         List<EmployeeAdditionalWorkingDay> additionalRows =
@@ -102,7 +101,7 @@ public class ShiftResolverService {
         String snapshotSource = text(record == null ? null : record.get("shiftSource"));
         if (snapshotStart.isPresent()
                 && snapshotEnd.isPresent()
-                && snapshotEnd.get().isAfter(snapshotStart.get())
+                && !snapshotEnd.get().equals(snapshotStart.get())
                 && !snapshotSource.isBlank()) {
             int minutes = snapshotMinutes == null || snapshotMinutes < 0
                     ? minutesBetween(snapshotStart.get(), snapshotEnd.get())
@@ -149,7 +148,7 @@ public class ShiftResolverService {
         if (additionalDay != null) {
             Optional<LocalTime> start = parseFlexibleTime(additionalDay.getTimeIn());
             Optional<LocalTime> end = parseFlexibleTime(additionalDay.getTimeOut());
-            if (start.isPresent() && end.isPresent() && end.get().isAfter(start.get())) {
+            if (start.isPresent() && end.isPresent() && !end.get().equals(start.get())) {
                 return of(start.get(), end.get(), "ADDITIONAL_WORKING_DAY", true, true, false, false);
             }
         }
@@ -162,7 +161,7 @@ public class ShiftResolverService {
                 .or(() -> parseFlexibleTime(shiftStart));
         Optional<LocalTime> end = parseFlexibleTime(shiftEndTime)
                 .or(() -> parseFlexibleTime(shiftEnd));
-        if (start.isPresent() && end.isPresent() && end.get().isAfter(start.get())) {
+        if (start.isPresent() && end.isPresent() && !end.get().equals(start.get())) {
             return of(start.get(), end.get(), "REGULAR", true, false, false, false);
         }
         return of(DEFAULT_SHIFT_START, DEFAULT_SHIFT_END, "FALLBACK", true, false, false, false);
@@ -260,7 +259,13 @@ public class ShiftResolverService {
         }
         String employeeBranch = text(branch).toLowerCase(Locale.ROOT);
         for (Holiday holiday : holidays) {
-            if (holiday == null || !date.equals(holiday.getHolidayDate())) {
+            if (holiday == null || holiday.getHolidayDate() == null) {
+                continue;
+            }
+            LocalDate endDate = holiday.getHolidayEndDate() == null
+                    ? holiday.getHolidayDate()
+                    : holiday.getHolidayEndDate();
+            if (date.isBefore(holiday.getHolidayDate()) || date.isAfter(endDate)) {
                 continue;
             }
             String branchScope = text(holiday.getBranchScope());
@@ -336,10 +341,11 @@ public class ShiftResolverService {
     }
 
     private int minutesBetween(LocalTime start, LocalTime end) {
-        if (start == null || end == null || !end.isAfter(start)) {
+        if (start == null || end == null || end.equals(start)) {
             return 0;
         }
-        return Math.max(0, (int) Duration.between(start, end).toMinutes());
+        int minutes = (int) Duration.between(start, end).toMinutes();
+        return minutes > 0 ? minutes : minutes + 24 * 60;
     }
 
     private String normalize(String value) {

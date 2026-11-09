@@ -7,12 +7,14 @@ import com.example.demo.MODELS.Employee;
 import com.example.demo.MODELS.EmployeeAdditionalWorkingDay;
 import com.example.demo.MODELS.LeavePermission;
 import com.example.demo.MODELS.Location;
+import com.example.demo.MODELS.MissedTimeoutSubmission;
 import com.example.demo.MODELS.OvertimeRequest;
 import com.example.demo.MODELS.OvertimeRequestStatus;
 import com.example.demo.repo.AttendanceRecordRepository;
 import com.example.demo.repo.EmployeeRepository;
 import com.example.demo.repo.LeavePermissionRepository;
 import com.example.demo.repo.LocationRepository;
+import com.example.demo.repo.MissedTimeoutSubmissionRepository;
 import com.example.demo.repo.OvertimeRequestRepository;
 import com.example.demo.service.AttendanceMetricsService;
 import com.example.demo.service.AttendanceSchedulerService;
@@ -48,6 +50,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -99,10 +102,14 @@ private LocationRepository locationRepository;
     private com.example.demo.service.SchemaMaintenanceService schemaMaintenanceService;
     @Autowired
     private OvertimeRequestRepository overtimeRequestRepository;
+    @Autowired
+    private MissedTimeoutSubmissionRepository missedTimeoutSubmissionRepository;
         private static final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter TIME_FORMATTER_HH_MM = DateTimeFormatter.ofPattern("H:mm");
     private static final DateTimeFormatter TIME_FORMATTER_HH_MM_SS = DateTimeFormatter.ofPattern("H:mm:ss");
+    private static final int MISSED_TIMEOUT_MONTHLY_LIMIT = 3;
 @PutMapping("/start-day")
+@Transactional
 public ResponseEntity<?> startDay(@RequestParam Long employeeId,
                                   @RequestParam String location,
                                   @RequestParam(value = "clientId", required = false) Long clientId,
@@ -111,7 +118,6 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
     long started = System.nanoTime();
     schemaMaintenanceService.ensureEmployeeSchema();
     String todayDate = LocalDate.now().format(dateFormatter);
-    String yesterdayDate = LocalDate.now().minusDays(1).format(dateFormatter);
 
     // 1. Check if employee exists
     Optional<Employee> employeeOptional = employeeRepository.findById(employeeId);
@@ -134,22 +140,15 @@ public ResponseEntity<?> startDay(@RequestParam Long employeeId,
         }
     }
 
-    // 2. Check yesterday's attendance for missing time-out
-    List<AttendanceRecord> yesterdayRecords = attendanceRecordRepository.findByEmployeeIdAndDate(employeeId, yesterdayDate);
-    if (!yesterdayRecords.isEmpty()) {
-        AttendanceRecord yesterdayRecord = yesterdayRecords.get(0);
-        if (yesterdayRecord.getAttendanceStatus().equalsIgnoreCase("Present") &&
-            yesterdayRecord.getTimeOut() == null) {
-            // If TimoutReason is not set, block and return the record ID
-            if (yesterdayRecord.getTimoutReason() == null || yesterdayRecord.getTimoutReason().isEmpty()) {
-                Map<String, Object> response = new HashMap<>();
-                response.put("error", "You didn’t mark time-out yesterday. Please submit a timeout reason.");
-                response.put("missedTimeoutRecordId", yesterdayRecord.getId());
-                LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=PREVIOUS_TIMEOUT_MISSING employeeId={} clientId={} attendanceDate={} previousRecordId={} status=403 durationMs={}",
-                        RequestLogContext.correlationId(), employeeId, clientId, todayDate, yesterdayRecord.getId(), elapsedMs(started));
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
-            }
-        }
+    // 2. Resolve yesterday's missing time-out before allowing a new day to start.
+    Map<String, Object> missedTimeoutPrompt = evaluateMissedTimeoutPrompt(employee, LocalDate.now().minusDays(1));
+    if (Boolean.TRUE.equals(missedTimeoutPrompt.get("requiresSubmission"))) {
+        Map<String, Object> response = new HashMap<>(missedTimeoutPrompt);
+        response.put("error", "You didn’t mark time-out yesterday. Please submit the missed time-out form.");
+        response.put("missedTimeoutRecordId", missedTimeoutPrompt.get("recordId"));
+        LOGGER.warn("event=START_DAY_REJECTED correlationId={} reason=PREVIOUS_TIMEOUT_MISSING employeeId={} clientId={} attendanceDate={} previousRecordId={} status=403 durationMs={}",
+                RequestLogContext.correlationId(), employeeId, clientId, todayDate, missedTimeoutPrompt.get("recordId"), elapsedMs(started));
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
     }
 
     // 3. Check if attendance already marked today
@@ -201,18 +200,113 @@ private double distanceMeters(double lat1, double lon1, double lat2, double lon2
     return 6371000.0 * c;
 }
     
-@PostMapping("/submit-timeout-reason")
-public ResponseEntity<?> submitTimeoutReason(@RequestParam Long recordId, @RequestParam String reason) {
+@GetMapping("/missed-timeout/prompt")
+@Transactional
+public ResponseEntity<?> getMissedTimeoutPrompt(
+        @RequestParam Long employeeId,
+        @RequestParam(value = "clientId", required = false) Long clientId) {
     schemaMaintenanceService.ensureEmployeeSchema();
-    Optional<AttendanceRecord> optionalRecord = attendanceRecordRepository.findById(recordId);
-    if (optionalRecord.isPresent()) {
-        AttendanceRecord record = optionalRecord.get();
-        record.setTimoutReason(reason);
-        attendanceRecordRepository.save(record);
-        return ResponseEntity.ok("Timeout reason submitted successfully.");
-    } else {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Attendance record not found.");
+    Optional<Employee> employeeOptional = employeeRepository.findByIdForUpdate(employeeId);
+    if (employeeOptional.isEmpty()) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", "Employee not found."));
     }
+    Employee employee = employeeOptional.get();
+    if (clientId != null && !clientId.equals(employee.getClientId())) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", "Access denied."));
+    }
+    return ResponseEntity.ok(evaluateMissedTimeoutPrompt(employee, LocalDate.now().minusDays(1)));
+}
+
+@PostMapping("/missed-timeout/submit")
+@Transactional
+public ResponseEntity<?> submitMissedTimeout(
+        @RequestParam Long employeeId,
+        @RequestParam Long recordId,
+        @RequestParam String reason,
+        @RequestParam String clockOutTime,
+        @RequestParam(value = "clientId", required = false) Long clientId) {
+    schemaMaintenanceService.ensureEmployeeSchema();
+    String cleanReason = reason == null ? "" : reason.trim();
+    if (cleanReason.isEmpty()) {
+        return ResponseEntity.badRequest().body(Map.of("message", "A reason is required."));
+    }
+
+    LocalTime selectedClockOut;
+    try {
+        selectedClockOut = parseClockOutTime(clockOutTime);
+    } catch (DateTimeParseException ex) {
+        return ResponseEntity.badRequest().body(Map.of("message", "Clock-out time must be a valid time."));
+    }
+
+    Optional<Employee> employeeOptional = employeeRepository.findByIdForUpdate(employeeId);
+    if (employeeOptional.isEmpty()) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", "Employee not found."));
+    }
+    Employee employee = employeeOptional.get();
+    if (clientId != null && !clientId.equals(employee.getClientId())) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", "Access denied."));
+    }
+
+    Optional<AttendanceRecord> recordOptional = attendanceRecordRepository.findById(recordId);
+    if (recordOptional.isEmpty()) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", "Attendance record not found."));
+    }
+    AttendanceRecord record = recordOptional.get();
+    if (record.getEmployee() == null || !employeeId.equals(record.getEmployee().getId())) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("message", "Access denied for this attendance record."));
+    }
+
+    LocalDate attendanceDate = parseAttendanceDate(record);
+    if (attendanceDate == null || !attendanceDate.equals(LocalDate.now().minusDays(1))) {
+        return ResponseEntity.badRequest().body(Map.of("message", "Only yesterday's missed time-out can be submitted."));
+    }
+    if (!isMissedTimeoutEligible(record) || record.getTimeOut() != null) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", "This attendance record is not awaiting a missed time-out."));
+    }
+    if (missedTimeoutSubmissionRepository.existsByAttendanceRecordId(recordId)) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", "A missed time-out has already been submitted for this day."));
+    }
+
+    int submittedThisMonth = countMissedTimeoutSubmissions(employeeId, LocalDate.now());
+    if (submittedThisMonth >= MISSED_TIMEOUT_MONTHLY_LIMIT) {
+        applyMissedTimeoutLimitLop(record);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "message", "Monthly missed time-out limit reached. Yesterday has been marked as Loss of Pay (LOP).",
+                "autoLopApplied", true));
+    }
+
+    LocalDateTime clockOutDateTime = attendanceDate.atTime(selectedClockOut);
+    if (record.getTimeIn() != null && !clockOutDateTime.isAfter(record.getTimeIn())) {
+        boolean overnightShift = !resolveShiftEnd(record).isAfter(resolveShiftStart(record));
+        if (!overnightShift) {
+            return ResponseEntity.badRequest().body(Map.of("message", "Clock-out time must be after the recorded time-in."));
+        }
+        clockOutDateTime = clockOutDateTime.plusDays(1);
+    }
+
+    record.setTimeOut(clockOutDateTime);
+    record.setDayStatus("Completed");
+    record.setTimoutReason(cleanReason);
+    applyShiftSnapshotIfMissing(record);
+    updateDerivedAttendanceHours(record);
+    employeeService.updateMissedTimes(record);
+    attendanceRecordRepository.save(record);
+
+    MissedTimeoutSubmission submission = new MissedTimeoutSubmission();
+    submission.setEmployee(employee);
+    submission.setAttendanceRecord(record);
+    submission.setAttendanceDate(attendanceDate);
+    submission.setReason(cleanReason);
+    submission.setClockOutTime(selectedClockOut);
+    submission.setSubmittedAt(LocalDateTime.now());
+    missedTimeoutSubmissionRepository.save(submission);
+
+    int submissionNumber = submittedThisMonth + 1;
+    return ResponseEntity.ok(Map.of(
+            "message", missedTimeoutReminder(submissionNumber),
+            "submissionCount", submissionNumber,
+            "remainingChances", MISSED_TIMEOUT_MONTHLY_LIMIT - submissionNumber,
+            "attendanceRecordId", record.getId()));
 }
 @GetMapping("/missed-timeout")
 public List<Map<String, Object>> getMissedTimeoutEmployees(
@@ -234,12 +328,13 @@ public List<Map<String, Object>> getMissedTimeoutEmployees(
     for (Object[] record : records) {
         Map<String, Object> map = new HashMap<>();
         map.put("attendanceId", record[0]);
-        map.put("firstName", record[1]);
-        map.put("lastName", record[2]);
-        map.put("mobile", record[3]);
-        map.put("branch", record[4]);
-        map.put("position", record[5]);
-        map.put("date", record[6]);
+        map.put("employeeId", record[1]);
+        map.put("firstName", record[2]);
+        map.put("lastName", record[3]);
+        map.put("mobile", record[4]);
+        map.put("branch", record[5]);
+        map.put("position", record[6]);
+        map.put("date", record[7]);
         map.put("timeoutReason", null);
         result.add(map);
     }
@@ -263,6 +358,98 @@ public ResponseEntity<Long> getMissedTimeoutCount(
     }
 }
 
+@GetMapping("/missed-timeout/submissions")
+public List<Map<String, Object>> getMissedTimeoutSubmissions(
+        @RequestParam(value = "clientId", required = false) Long clientId,
+        @RequestParam(value = "branch", required = false) String branch,
+        @RequestParam(value = "limit", defaultValue = "5000") int limit) {
+    int responseLimit = clampClockOutReportLimit(limit);
+    Pageable page = PageRequest.of(0, responseLimit);
+    String normalizedBranch = requestFilterService.normalizeBranch(branch);
+    List<Object[]> pendingRows = attendanceRecordRepository.findMissedTimeoutRows(
+            "Present",
+            clientId,
+            normalizedBranch,
+            page);
+    List<Object[]> rows = missedTimeoutSubmissionRepository.findSubmittedReportRows(
+            clientId,
+            normalizedBranch,
+            page);
+    List<Map<String, Object>> result = new ArrayList<>();
+    Set<Long> attendanceIdsWithNewSubmission = new HashSet<>();
+
+    for (Object[] row : pendingRows) {
+        Map<String, Object> reportRow = new LinkedHashMap<>();
+        reportRow.put("submissionId", "pending-" + row[0]);
+        reportRow.put("attendanceId", row[0]);
+        reportRow.put("employeeId", row[1]);
+        reportRow.put("firstName", row[2]);
+        reportRow.put("lastName", row[3]);
+        reportRow.put("mobile", row[4]);
+        reportRow.put("branch", row[5]);
+        reportRow.put("position", row[6]);
+        reportRow.put("attendanceDate", row[7]);
+        reportRow.put("clockOutTime", null);
+        reportRow.put("reason", "Awaiting employee missed time-out submission.");
+        reportRow.put("submittedAt", null);
+        reportRow.put("requestStatus", "PENDING");
+        result.add(reportRow);
+    }
+
+    for (Object[] row : rows) {
+        Map<String, Object> reportRow = new LinkedHashMap<>();
+        reportRow.put("submissionId", row[0]);
+        reportRow.put("attendanceId", row[1]);
+        reportRow.put("employeeId", row[2]);
+        reportRow.put("firstName", row[3]);
+        reportRow.put("lastName", row[4]);
+        reportRow.put("mobile", row[5]);
+        reportRow.put("branch", row[6]);
+        reportRow.put("position", row[7]);
+        reportRow.put("attendanceDate", row[8]);
+        reportRow.put("clockOutTime", row[9]);
+        reportRow.put("reason", row[10]);
+        reportRow.put("submittedAt", row[11]);
+        reportRow.put("requestStatus", "SUBMITTED");
+        result.add(reportRow);
+        Long attendanceId = asLong(row[1]);
+        if (attendanceId != null) {
+            attendanceIdsWithNewSubmission.add(attendanceId);
+        }
+    }
+
+    // Older clock-out requests were saved directly on attendance records before the
+    // employee form began storing an explicit MissedTimeoutSubmission entry.
+    List<Object[]> legacyRows = attendanceRecordRepository.findCompletedMissedTimeoutRows(
+            "Present",
+            clientId,
+            normalizedBranch,
+            page);
+    for (Object[] row : legacyRows) {
+        Long attendanceId = asLong(row[0]);
+        if (attendanceId != null && attendanceIdsWithNewSubmission.contains(attendanceId)) {
+            continue;
+        }
+
+        Map<String, Object> reportRow = new LinkedHashMap<>();
+        reportRow.put("submissionId", "legacy-" + row[0]);
+        reportRow.put("attendanceId", row[0]);
+        reportRow.put("employeeId", row[1]);
+        reportRow.put("firstName", row[2]);
+        reportRow.put("lastName", row[3]);
+        reportRow.put("mobile", row[4]);
+        reportRow.put("branch", row[5]);
+        reportRow.put("position", row[6]);
+        reportRow.put("attendanceDate", row[7]);
+        reportRow.put("clockOutTime", row[9]);
+        reportRow.put("reason", row[8]);
+        reportRow.put("submittedAt", null);
+        reportRow.put("requestStatus", "HISTORICAL");
+        result.add(reportRow);
+    }
+    return result;
+}
+
 @GetMapping("/completed-missed-timeout")
 public List<Map<String, Object>> getCompletedMissedTimeoutEmployees(
         @RequestParam(value = "clientId", required = false) Long clientId,
@@ -280,14 +467,15 @@ public List<Map<String, Object>> getCompletedMissedTimeoutEmployees(
     for (Object[] record : rows) {
         Map<String, Object> map = new HashMap<>();
         map.put("attendanceId", record[0]);
-        map.put("firstName", record[1]);
-        map.put("lastName", record[2]);
-        map.put("mobile", record[3]);
-        map.put("branch", record[4]);
-        map.put("position", record[5]);
-        map.put("date", record[6]);
-        map.put("timeoutReason", record[7]);
-        map.put("timeOut", record[8]);
+        map.put("employeeId", record[1]);
+        map.put("firstName", record[2]);
+        map.put("lastName", record[3]);
+        map.put("mobile", record[4]);
+        map.put("branch", record[5]);
+        map.put("position", record[6]);
+        map.put("date", record[7]);
+        map.put("timeoutReason", record[8]);
+        map.put("timeOut", record[9]);
         map.put("status", "COMPLETED");
         result.add(map);
     }
@@ -300,6 +488,13 @@ private int clampListLimit(int limit) {
         return 200;
     }
     return Math.min(limit, 200);
+}
+
+private int clampClockOutReportLimit(int limit) {
+    if (limit <= 0) {
+        return 5000;
+    }
+    return Math.min(limit, 10000);
 }
 
 @DeleteMapping("/completed-missed-timeout/{attendanceId}")
@@ -480,10 +675,37 @@ public ResponseEntity<String> markTimeIn(
         schemaMaintenanceService.ensureEmployeeSchema();
 
         String dbDate = DateUtil.isoToDb(isoDate);          // 14/07/2025
-        return attendanceRecordRepository.findByEmployee_IdAndDate(employeeId, dbDate)
-                .map(AttendanceRecordDTO::fromEntity)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        List<AttendanceRecord> records = attendanceRecordRepository.findByEmployeeIdAndDate(employeeId, dbDate);
+        if (records == null || records.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        AttendanceRecord latestRecord = records.stream()
+                .max(Comparator
+                        .comparingInt(this::attendanceImagePriority)
+                        .thenComparing(AttendanceRecord::getId, Comparator.nullsLast(Long::compareTo)))
+                .orElse(records.get(records.size() - 1));
+        return ResponseEntity.ok(AttendanceRecordDTO.fromEntity(latestRecord));
+    }
+
+    private int attendanceImagePriority(AttendanceRecord record) {
+        if (record == null) {
+            return 0;
+        }
+        int priority = 0;
+        if (record.getImageIn() != null || record.getImageOut() != null) {
+            priority += 8;
+        }
+        if (record.getTimeIn() != null || record.getTimeOut() != null) {
+            priority += 4;
+        }
+        String status = record.getAttendanceStatus();
+        if (status != null && !"Absent".equalsIgnoreCase(status.trim())) {
+            priority += 2;
+        }
+        if (record.getId() != null) {
+            priority += 1;
+        }
+        return priority;
     }
 
     /* ---------- 2. Monthly list endpoint --------------------------------- */
@@ -1255,23 +1477,27 @@ public Map<String, Object> getDashboardSummary(
         DashboardSummaryResult result = buildDashboardSummary(LocalDate.now(), clientId, normalizedBranch);
         DashboardDaySummary today = result.today();
         DashboardDaySummary yesterday = result.yesterday();
+        long presentToday = dashboardPresentPunchCount(result.summaryDate(), clientId, normalizedBranch, today.present());
+        long presentYesterday = dashboardPresentPunchCount(result.summaryDate().minusDays(1), clientId, normalizedBranch, yesterday.present());
 
         summary.put("totalEmployees", result.totalEmployees());
-        summary.put("presentToday", today.present());
-        summary.put("absentToday", Math.max(0L, result.totalEmployees() - today.present()));
+        summary.put("presentToday", presentToday);
+        summary.put("absentToday", Math.max(0L, result.totalEmployees() - presentToday));
         summary.put("lateArrivalsToday", today.late());
         summary.put("lateMinutesToday", today.lateMinutes());
-        summary.put("onTimeToday", today.onTime());
-        summary.put("presentYesterday", yesterday.present());
-        summary.put("absentYesterday", Math.max(0L, result.totalEmployees() - yesterday.present()));
+        summary.put("onTimeToday", Math.max(0L, presentToday - today.late()));
+        summary.put("presentYesterday", presentYesterday);
+        summary.put("absentYesterday", Math.max(0L, result.totalEmployees() - presentYesterday));
         summary.put("lateArrivalsYesterday", yesterday.late());
         summary.put("lateMinutesYesterday", yesterday.lateMinutes());
-        summary.put("onTimeYesterday", yesterday.onTime());
+        summary.put("onTimeYesterday", Math.max(0L, presentYesterday - yesterday.late()));
         summary.put("absentChangePercent", calculatePercentageChange(
-                Math.max(0L, result.totalEmployees() - yesterday.present()),
-                Math.max(0L, result.totalEmployees() - today.present())));
+                Math.max(0L, result.totalEmployees() - presentYesterday),
+                Math.max(0L, result.totalEmployees() - presentToday)));
         summary.put("lateChangePercent", calculatePercentageChange(yesterday.late(), today.late()));
-        summary.put("onTimeChangePercent", calculatePercentageChange(yesterday.onTime(), today.onTime()));
+        summary.put("onTimeChangePercent", calculatePercentageChange(
+                Math.max(0L, presentYesterday - yesterday.late()),
+                Math.max(0L, presentToday - today.late())));
         LOGGER.info(
                 "dashboard-summary-timing clientId={} branch={} summaryDate={} employees={} records={} syntheticRecords={} schemaMs={} employeeFetchMs={} attendanceFetchMs={} additionalWorkingFetchMs={} syntheticBuildMs={} classificationMs={} countMs={} totalMs={}",
                 clientId,
@@ -1312,6 +1538,25 @@ public Map<String, Object> getDashboardSummary(
         summary.put("onTimeChangePercent", 0.0);
         return summary;
     }
+}
+
+private long dashboardPresentPunchCount(LocalDate date, Long clientId, String normalizedBranch, long fallbackCount) {
+    if (date == null) {
+        return fallbackCount;
+    }
+    long total = 0L;
+    Pageable limit = PageRequest.of(0, 10_000);
+    for (String dateValue : dateCandidates(date)) {
+        List<Object[]> rows = normalizedBranch == null || normalizedBranch.isBlank()
+                ? attendanceRecordRepository.findTodayPresentTimeInRowsByDateAndClient(dateValue, clientId, limit)
+                : attendanceRecordRepository.findTodayPresentTimeInRowsByDateAndClientAndBranch(
+                        dateValue,
+                        clientId,
+                        normalizedBranch,
+                        limit);
+        total += rows.size();
+    }
+    return total > 0L ? total : fallbackCount;
 }
 
 private DashboardSummaryResult buildDashboardSummary(LocalDate todayDate, Long clientId, String normalizedBranch) {
@@ -1415,11 +1660,11 @@ private DashboardSummaryResult buildDashboardSummary(LocalDate todayDate, Long c
 
 private long countDashboardEmployees(Long clientId, String branch) {
     if (branch == null || branch.isBlank()) {
-        return clientId == null ? employeeRepository.count() : employeeRepository.countByClientId(clientId);
+        return clientId == null
+                ? employeeRepository.countByEmploymentStatusIgnoreCase("ACTIVE")
+                : employeeRepository.countByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE");
     }
-    return clientId == null
-            ? employeeRepository.countByBranchIgnoreCase(branch)
-            : employeeRepository.countByClientIdAndBranchIgnoreCase(clientId, branch);
+    return loadDashboardEmployees(clientId, branch).size();
 }
 
 private DashboardDaySummary classifyDashboardDay(LocalDate date, Long clientId, String normalizedBranch) {
@@ -1484,11 +1729,13 @@ private DashboardDaySummary classifyDashboardDay(LocalDate date, Long clientId, 
 
 private List<Employee> loadDashboardEmployees(Long clientId, String normalizedBranch) {
     if (normalizedBranch == null || normalizedBranch.isBlank()) {
-        return clientId == null ? employeeRepository.findAll() : employeeRepository.findByClientId(clientId);
+        return clientId == null
+                ? employeeRepository.findByEmploymentStatusIgnoreCase("ACTIVE")
+                : employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE");
     }
     return clientId == null
-            ? employeeRepository.findByBranchIgnoreCase(normalizedBranch)
-            : employeeRepository.findByClientIdAndBranchIgnoreCase(clientId, normalizedBranch);
+            ? employeeRepository.findByBranchIgnoreCaseAndEmploymentStatusIgnoreCase(normalizedBranch, "ACTIVE")
+            : employeeRepository.findByClientIdAndBranchIgnoreCaseAndEmploymentStatusIgnoreCase(clientId, normalizedBranch, "ACTIVE");
 }
 
 private Map<String, Object> toDashboardRecordMap(AttendanceRecord source) {
@@ -1644,7 +1891,7 @@ private Map<String, Object> toAbsentPopupEmployee(Map<String, Object> classified
 
 private DashboardDaySummary incrementDashboardSummary(DashboardDaySummary current, Map<String, Object> row) {
     DashboardDaySummary base = current == null ? DashboardDaySummary.empty() : current;
-    String countStatus = String.valueOf(row.getOrDefault("countStatus", ""));
+    String countStatus = resolveDashboardCountStatus(row);
     int rowLateMinutes = intValue(row.get("lateMinutes"));
     if ("Present".equalsIgnoreCase(countStatus)) {
         long lateIncrement = rowLateMinutes > 0 ? 1L : 0L;
@@ -1664,6 +1911,16 @@ private DashboardDaySummary incrementDashboardSummary(DashboardDaySummary curren
                 Math.max(0L, base.present() - base.late()));
     }
     return base;
+}
+
+private String resolveDashboardCountStatus(Map<String, Object> row) {
+    String countStatus = String.valueOf(row.getOrDefault("countStatus", "")).trim();
+    String attendanceStatus = String.valueOf(row.getOrDefault("attendanceStatus", "")).trim();
+    Object timeIn = row.get("timeIn");
+    if ("Present".equalsIgnoreCase(attendanceStatus) && timeIn != null && !String.valueOf(timeIn).isBlank()) {
+        return "Present";
+    }
+    return countStatus;
 }
 
 private int intValue(Object value) {
@@ -1884,6 +2141,92 @@ private void upsertSwapWeekoffAttendance(Employee employee, LocalDate date) {
 
 private boolean isSwapWeekoffType(String leaveTypeRaw) {
     return leaveTypeRaw != null && leaveTypeRaw.trim().equalsIgnoreCase("Swap Weekoff");
+}
+
+private Map<String, Object> evaluateMissedTimeoutPrompt(Employee employee, LocalDate attendanceDate) {
+    Map<String, Object> response = new LinkedHashMap<>();
+    response.put("requiresSubmission", false);
+    response.put("autoLopApplied", false);
+
+    if (employee == null || employee.getId() == null || attendanceDate == null) {
+        return response;
+    }
+
+    String storedDate = attendanceDate.format(dateFormatter);
+    AttendanceRecord record = attendanceRecordRepository.findByEmployeeIdAndDate(employee.getId(), storedDate)
+            .stream()
+            .filter(this::isMissedTimeoutEligible)
+            .findFirst()
+            .orElse(null);
+    if (record == null) {
+        return response;
+    }
+
+    int submittedThisMonth = countMissedTimeoutSubmissions(employee.getId(), LocalDate.now());
+    if (submittedThisMonth >= MISSED_TIMEOUT_MONTHLY_LIMIT) {
+        applyMissedTimeoutLimitLop(record);
+        response.put("autoLopApplied", true);
+        response.put("message", "Your missed time-out limit has been used. Yesterday was marked as Loss of Pay (LOP).");
+        return response;
+    }
+
+    response.put("requiresSubmission", true);
+    response.put("recordId", record.getId());
+    response.put("attendanceDate", storedDate);
+    response.put("submissionCount", submittedThisMonth);
+    response.put("remainingChances", MISSED_TIMEOUT_MONTHLY_LIMIT - submittedThisMonth);
+    response.put("message", missedTimeoutReminder(submittedThisMonth + 1));
+    return response;
+}
+
+private boolean isMissedTimeoutEligible(AttendanceRecord record) {
+    if (record == null || record.getTimeIn() == null || record.getTimeOut() != null) {
+        return false;
+    }
+    String status = record.getAttendanceStatus() == null ? "" : record.getAttendanceStatus().trim();
+    return status.equalsIgnoreCase("Present");
+}
+
+private int countMissedTimeoutSubmissions(Long employeeId, LocalDate monthDate) {
+    LocalDate firstDay = monthDate.withDayOfMonth(1);
+    LocalDateTime monthStart = firstDay.atStartOfDay();
+    LocalDateTime nextMonthStart = firstDay.plusMonths(1).atStartOfDay();
+    return Math.toIntExact(missedTimeoutSubmissionRepository
+            .countByEmployeeIdAndSubmittedAtGreaterThanEqualAndSubmittedAtLessThan(
+                    employeeId, monthStart, nextMonthStart));
+}
+
+private void applyMissedTimeoutLimitLop(AttendanceRecord record) {
+    record.setAttendanceStatus("Absent");
+    record.setDayStatus("LOP");
+    record.setWorkedHours(0.0);
+    record.setOvertime(0.0);
+    record.setMissedTimes(0);
+    record.setTimoutReason("Automatic LOP: missed time-out monthly limit reached.");
+    attendanceRecordRepository.save(record);
+}
+
+private LocalDate parseAttendanceDate(AttendanceRecord record) {
+    return record == null ? null : parseDbDate(record.getDate());
+}
+
+private LocalTime parseClockOutTime(String value) {
+    if (value == null || value.isBlank()) {
+        throw new DateTimeParseException("Clock-out time is required", String.valueOf(value), 0);
+    }
+    try {
+        return LocalTime.parse(value.trim(), TIME_FORMATTER_HH_MM);
+    } catch (DateTimeParseException ignored) {
+        return LocalTime.parse(value.trim(), TIME_FORMATTER_HH_MM_SS);
+    }
+}
+
+private String missedTimeoutReminder(int submissionNumber) {
+    return switch (submissionNumber) {
+        case 1 -> "Please ensure you mark your time-out regularly. You have only 2 more chances remaining this month. Repeatedly missing your time-out may result in Loss of Pay (LOP).";
+        case 2 -> "Reminder: You have only 1 more chance remaining this month. Please make sure to mark your time-out every day to avoid attendance discrepancies.";
+        default -> "Final Warning: This is your last chance for this month. No further missed time-out submissions will be allowed. If you miss marking your time-out again, the day will automatically be calculated as Loss of Pay (LOP).";
+    };
 }
 
 private LocalDate parseDbDate(String rawDate) {

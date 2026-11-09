@@ -152,7 +152,7 @@
 .holiday-calendar-list-header,
 .holiday-calendar-list-row {
   display: grid;
-  grid-template-columns: 1.2fr 2fr 1fr 0.8fr;
+  grid-template-columns: 1fr 1fr 2fr 1fr 1.1fr 0.8fr;
   gap: 12px;
   align-items: center;
   padding: 8px 10px;
