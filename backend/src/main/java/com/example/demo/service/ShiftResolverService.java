@@ -41,9 +41,8 @@ public class ShiftResolverService {
         List<Holiday> holidays = List.of();
         Long effectiveClientId = clientId != null ? clientId : employee == null ? null : employee.getClientId();
         if (effectiveClientId != null && date != null) {
-            holidays = holidayRepository.findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(
+            holidays = holidayRepository.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(
                     effectiveClientId,
-                    date,
                     date);
         }
         List<EmployeeAdditionalWorkingDay> additionalRows =
@@ -260,7 +259,13 @@ public class ShiftResolverService {
         }
         String employeeBranch = text(branch).toLowerCase(Locale.ROOT);
         for (Holiday holiday : holidays) {
-            if (holiday == null || !date.equals(holiday.getHolidayDate())) {
+            if (holiday == null || holiday.getHolidayDate() == null) {
+                continue;
+            }
+            LocalDate endDate = holiday.getHolidayEndDate() == null
+                    ? holiday.getHolidayDate()
+                    : holiday.getHolidayEndDate();
+            if (date.isBefore(holiday.getHolidayDate()) || date.isAfter(endDate)) {
                 continue;
             }
             String branchScope = text(holiday.getBranchScope());

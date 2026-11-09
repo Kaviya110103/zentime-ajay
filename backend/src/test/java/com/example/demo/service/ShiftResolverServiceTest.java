@@ -93,6 +93,29 @@ class ShiftResolverServiceTest {
         assertThat(result.shiftSource()).isEqualTo("HOLIDAY");
     }
 
+    @Test
+    void holidayRangeClassifiesEveryDateInTheRangeAsHoliday() {
+        Employee employee = employee();
+        Holiday holiday = new Holiday();
+        holiday.setHolidayDate(LocalDate.of(2026, 10, 19));
+        holiday.setHolidayEndDate(LocalDate.of(2026, 10, 21));
+
+        ShiftResolverService.ShiftResolution middleDay = resolver.resolve(
+                employee,
+                LocalDate.of(2026, 10, 20),
+                List.of(holiday),
+                List.of());
+        ShiftResolverService.ShiftResolution dayAfterRange = resolver.resolve(
+                employee,
+                LocalDate.of(2026, 10, 22),
+                List.of(holiday),
+                List.of());
+
+        assertThat(middleDay.holiday()).isTrue();
+        assertThat(middleDay.scheduledWorkingDay()).isFalse();
+        assertThat(dayAfterRange.holiday()).isFalse();
+    }
+
     private Employee employee() {
         Employee employee = new Employee();
         employee.setId(1L);

@@ -230,8 +230,8 @@ public class PayrollController {
             @RequestParam("clientId") Long clientId,
             @RequestParam(value = "branch", required = false) String branch) {
         List<Employee> employees = branch == null || branch.isBlank()
-                ? employeeRepository.findByClientId(clientId)
-                : employeeRepository.findByClientIdAndBranchIgnoreCase(clientId, branch.trim());
+                ? employeeRepository.findByClientIdAndEmploymentStatusIgnoreCase(clientId, "ACTIVE")
+                : employeeRepository.findByClientIdAndBranchIgnoreCaseAndEmploymentStatusIgnoreCase(clientId, branch.trim(), "ACTIVE");
         List<Map<String, Object>> response = employees.stream()
                 .map(employee -> {
                     Map<String, Object> item = new HashMap<>();

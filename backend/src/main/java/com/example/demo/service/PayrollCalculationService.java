@@ -104,10 +104,12 @@ public class PayrollCalculationService {
 
         List<Map<String, Object>> calendarRows =
                 attendanceClassificationService.classifyCalendar(employee, firstDate, lastDate, effectiveClientId);
+        Map<LocalDate, Double> holidayFractionByDate =
+                buildHolidayMap(effectiveClientId, firstDate, lastDate);
         Map<LocalDate, Integer> scheduledMinutesByDate = new HashMap<>();
         int configuredWeekOffDays = 0;
         int additionalWorkingDays = 0;
-        int classifiedScheduledDayCount = 0;
+        double classifiedScheduledDayCount = 0.0;
         int classifiedScheduledMinutesTotal = 0;
         for (int index = 0; index < calendarRows.size(); index++) {
             Map<String, Object> row = calendarRows.get(index);
@@ -121,10 +123,14 @@ public class PayrollCalculationService {
             if (objectBoolean(row.get("reviewRequired"))) {
                 throw new IllegalStateException("Payroll review required for " + date + ": " + row.get("reviewReason"));
             }
-            scheduledMinutesByDate.put(date, expectedMinutes);
-            if (expectedMinutes > 0) {
-                classifiedScheduledDayCount++;
-                classifiedScheduledMinutesTotal += expectedMinutes;
+            double holidayFraction = Math.max(0.0, Math.min(1.0,
+                    holidayFractionByDate.getOrDefault(date, 0.0)));
+            int payrollScheduledMinutes = (int) Math.round(expectedMinutes * (1.0 - holidayFraction));
+            scheduledMinutesByDate.put(date, payrollScheduledMinutes);
+            if (payrollScheduledMinutes > 0) {
+                // A configured short additional shift is still one scheduled workday.
+                classifiedScheduledDayCount += 1.0 - holidayFraction;
+                classifiedScheduledMinutesTotal += payrollScheduledMinutes;
             }
             if (objectBoolean(row.get("weekOff"))) {
                 configuredWeekOffDays++;
@@ -134,8 +140,6 @@ public class PayrollCalculationService {
             }
         }
 
-        Map<LocalDate, Double> holidayFractionByDate =
-                buildHolidayMap(effectiveClientId, firstDate, lastDate);
         double publicHolidayDays = holidayFractionByDate.values().stream()
                 .filter(Objects::nonNull)
                 .mapToDouble(value -> Math.max(0.0, Math.min(1.0, value)))
@@ -713,16 +717,22 @@ public class PayrollCalculationService {
             return Collections.emptyMap();
         }
         Map<LocalDate, Double> holidayMap = new HashMap<>();
-        List<Holiday> holidays = holidayRepository.findByClientIdAndHolidayDateBetweenOrderByHolidayDateAsc(
+        List<Holiday> holidays = holidayRepository.findByClientIdAndHolidayDateLessThanEqualOrderByHolidayDateAsc(
                 clientId,
-                start,
                 end);
         for (Holiday holiday : holidays) {
             if (holiday == null || holiday.getHolidayDate() == null) {
                 continue;
             }
+            LocalDate holidayEndDate = holiday.getHolidayEndDate() == null
+                    ? holiday.getHolidayDate()
+                    : holiday.getHolidayEndDate();
             double fraction = "HALF".equalsIgnoreCase(holiday.getHolidayType()) ? 0.5 : 1.0;
-            holidayMap.put(holiday.getHolidayDate(), fraction);
+            for (LocalDate date = holiday.getHolidayDate(); !date.isAfter(holidayEndDate); date = date.plusDays(1)) {
+                if (!date.isBefore(start) && !date.isAfter(end)) {
+                    holidayMap.merge(date, fraction, Math::max);
+                }
+            }
         }
         return holidayMap;
     }

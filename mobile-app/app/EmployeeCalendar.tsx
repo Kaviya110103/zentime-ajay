@@ -27,6 +27,7 @@ type HolidayData = {
   id: number;
   clientId: number;
   holidayDate: string;
+  holidayEndDate?: string;
   holidayName: string;
   holidayType: 'FULL' | 'HALF' | string;
 };
@@ -56,6 +57,8 @@ export default function EmployeeCalendar() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [attendanceData, setAttendanceData] = useState<AttendanceData | null>(null);
   const [selectedHoliday, setSelectedHoliday] = useState<HolidayData | null>(null);
+  const [upcomingHolidays, setUpcomingHolidays] = useState<HolidayData[]>([]);
+  const [activeTab, setActiveTab] = useState<'holidays' | 'attendance'>('holidays');
   const [modalVisible, setModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const { employee } = useContext(EmployeeContext);
@@ -87,12 +90,20 @@ export default function EmployeeCalendar() {
     return null;
   };
 
+  const toLocalDateKey = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   useEffect(() => {
     if (Number.isFinite(employeeId) && employeeId > 0) {
       setIsEmployeeReady(true);
       const today = new Date();
       fetchMonthlyAttendance(today.getMonth() + 1, today.getFullYear());
       fetchMonthlyHolidays(today.getMonth() + 1, today.getFullYear());
+      fetchUpcomingHolidays();
     } else {
       setIsEmployeeReady(false);
     }
@@ -171,14 +182,18 @@ export default function EmployeeCalendar() {
       const holidayMarks: MarkedDates = {};
 
       holidayList.forEach((holiday) => {
-        const normalized = normalizeDateKey(holiday?.holidayDate);
-        if (!normalized) return;
-        holidayMap[normalized] = holiday;
-        holidayMarks[normalized] = {
-          marked: true,
-          dotColor: holiday.holidayType === 'HALF' ? '#8B5CF6' : '#1976D2',
-          selectedDotColor: '#FFFFFF',
-        };
+        const startDate = normalizeDateKey(holiday?.holidayDate);
+        const endDate = normalizeDateKey(holiday?.holidayEndDate) || startDate;
+        if (!startDate || !endDate) return;
+        for (const date = new Date(`${startDate}T00:00:00`); date <= new Date(`${endDate}T00:00:00`); date.setDate(date.getDate() + 1)) {
+          const dateKey = toLocalDateKey(date);
+          holidayMap[dateKey] = holiday;
+          holidayMarks[dateKey] = {
+            marked: true,
+            dotColor: holiday.holidayType === 'HALF' ? '#8B5CF6' : '#1976D2',
+            selectedDotColor: '#FFFFFF',
+          };
+        }
       });
 
       setHolidaysByDate(holidayMap);
@@ -187,6 +202,20 @@ export default function EmployeeCalendar() {
       console.error('Error fetching monthly holidays:', err);
       setHolidaysByDate({});
       setHolidayMarkedDates({});
+    }
+  };
+
+  const fetchUpcomingHolidays = async () => {
+    if (!Number.isFinite(employeeId) || employeeId <= 0) return;
+    try {
+      const res = await axios.get(
+        buildApiUrl(`/api/employee/holidays/upcoming/${employeeId}`),
+        { timeout: 10000, params: withClientId({}, clientId) }
+      );
+      setUpcomingHolidays(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error('Error fetching upcoming holidays:', err);
+      setUpcomingHolidays([]);
     }
   };
 
@@ -318,6 +347,36 @@ export default function EmployeeCalendar() {
   const getHolidayTypeLabel = (holidayType?: string) => {
     if (!holidayType) return 'Holiday';
     return holidayType.toUpperCase() === 'HALF' ? 'Half Day Holiday' : 'Full Day Holiday';
+  };
+
+  const formatHolidayRange = (holiday: HolidayData) => {
+    const start = formatDate(holiday.holidayDate);
+    const endDate = holiday.holidayEndDate || holiday.holidayDate;
+    return endDate === holiday.holidayDate ? start : `${start} to ${formatDate(endDate)}`;
+  };
+
+  const getHolidayDuration = (holiday: HolidayData) => {
+    const startKey = normalizeDateKey(holiday.holidayDate);
+    const endKey = normalizeDateKey(holiday.holidayEndDate) || startKey;
+    if (!startKey || !endKey) return '1 day';
+
+    const [startYear, startMonth, startDay] = startKey.split('-').map(Number);
+    const [endYear, endMonth, endDay] = endKey.split('-').map(Number);
+    const duration = Math.floor(
+      (Date.UTC(endYear, endMonth - 1, endDay) - Date.UTC(startYear, startMonth - 1, startDay)) / 86400000
+    ) + 1;
+    return `${Math.max(1, duration)} ${duration === 1 ? 'day' : 'days'}`;
+  };
+
+  const getHolidayDateTile = (holiday: HolidayData) => {
+    const dateKey = normalizeDateKey(holiday.holidayDate);
+    if (!dateKey) return { day: '--', month: '' };
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const localDate = new Date(year, month - 1, day);
+    return {
+      day: String(day),
+      month: localDate.toLocaleDateString('en-US', { month: 'short' }).toUpperCase(),
+    };
   };
 
   // Show loading while employee data is loading
@@ -540,9 +599,64 @@ export default function EmployeeCalendar() {
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
       >
-        <Text style={styles.headerTitle}>Attendance Logs</Text>
+        <Text style={styles.headerTitle}>Calendar</Text>
       </LinearGradient>
 
+      <View style={[styles.segmentedControl, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <TouchableOpacity
+          onPress={() => setActiveTab('holidays')}
+          style={[styles.segmentButton, activeTab === 'holidays' && { backgroundColor: colors.primary }]}
+        >
+          <Text style={[styles.segmentText, { color: activeTab === 'holidays' ? '#ffffff' : colors.mutedText }]}>Upcoming Holidays</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setActiveTab('attendance')}
+          style={[styles.segmentButton, activeTab === 'attendance' && { backgroundColor: colors.primary }]}
+        >
+          <Text style={[styles.segmentText, { color: activeTab === 'attendance' ? '#ffffff' : colors.mutedText }]}>Attendance</Text>
+        </TouchableOpacity>
+      </View>
+
+      {activeTab === 'holidays' ? (
+        <ScrollView style={styles.holidayList} contentContainerStyle={styles.holidayListContent} showsVerticalScrollIndicator={false}>
+          {upcomingHolidays.length === 0 ? (
+            <View style={[styles.emptyHolidayState, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Feather name="calendar" size={36} color={colors.mutedText} />
+              <Text style={[styles.emptyHolidayText, { color: colors.mutedText }]}>No upcoming holidays announced.</Text>
+            </View>
+          ) : upcomingHolidays.map((holiday) => {
+            const isHalfDay = holiday.holidayType === 'HALF';
+            const tile = getHolidayDateTile(holiday);
+            const accentColor = isHalfDay ? '#7c3aed' : '#2563eb';
+            return (
+              <View key={String(holiday.id)} style={[styles.holidayCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={[styles.holidayAccent, { backgroundColor: accentColor }]} />
+                <View style={[styles.holidayDateTile, { backgroundColor: isHalfDay ? '#f3e8ff' : '#e0f2fe' }]}>
+                  <Text style={[styles.holidayTileDay, { color: accentColor }]}>{tile.day}</Text>
+                  <Text style={[styles.holidayTileMonth, { color: accentColor }]}>{tile.month}</Text>
+                </View>
+                <View style={styles.holidayDetails}>
+                  <View style={styles.holidayTitleRow}>
+                    <Text numberOfLines={1} style={[styles.holidayName, { color: colors.text }]}>{holiday.holidayName || 'Holiday'}</Text>
+                    <View style={[styles.durationBadge, { backgroundColor: isHalfDay ? '#f3e8ff' : '#e0f2fe' }]}>
+                      <Feather name="clock" size={12} color={accentColor} />
+                      <Text style={[styles.durationText, { color: accentColor }]}>{getHolidayDuration(holiday)}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.holidayMetaRow}>
+                    <Feather name="calendar" size={14} color={colors.mutedText} />
+                    <Text numberOfLines={2} style={[styles.holidayDate, { color: colors.mutedText }]}>{formatHolidayRange(holiday)}</Text>
+                  </View>
+                  <View style={styles.holidayMetaRow}>
+                    <Feather name={isHalfDay ? 'sun' : 'gift'} size={14} color={accentColor} />
+                    <Text style={[styles.holidayType, { color: colors.mutedText }]}>{getHolidayTypeLabel(holiday.holidayType)}</Text>
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+        </ScrollView>
+      ) : (
       <View style={styles.calendarWrapper}>
         {isLoadingMonthly && (
           <View style={styles.monthlyLoading}>
@@ -588,6 +702,7 @@ export default function EmployeeCalendar() {
           />
         </View>
       </View>
+      )}
 
       <Modal 
         visible={modalVisible} 
@@ -647,6 +762,113 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#ffffff',
     marginBottom: 4,
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 4,
+    padding: 4,
+    borderWidth: 1,
+    borderRadius: 8,
+  },
+  segmentButton: {
+    flex: 1,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  holidayList: {
+    flex: 1,
+  },
+  holidayListContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  holidayCard: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: 8,
+    minHeight: 112,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  holidayAccent: {
+    width: 4,
+  },
+  holidayDateTile: {
+    width: 58,
+    margin: 12,
+    marginRight: 2,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  holidayTileDay: {
+    fontSize: 24,
+    fontWeight: '800',
+    lineHeight: 28,
+  },
+  holidayTileMonth: {
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  holidayDetails: {
+    flex: 1,
+    paddingVertical: 13,
+    paddingRight: 12,
+  },
+  holidayTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  holidayName: {
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+  },
+  durationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  durationText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  holidayDate: {
+    fontSize: 13,
+    lineHeight: 18,
+    flex: 1,
+  },
+  holidayType: {
+    fontSize: 12,
+  },
+  holidayMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 7,
+  },
+  emptyHolidayState: {
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 28,
+    marginTop: 20,
+  },
+  emptyHolidayText: {
+    marginTop: 10,
+    fontSize: 14,
   },
   calendarWrapper: {
     flex: 1,

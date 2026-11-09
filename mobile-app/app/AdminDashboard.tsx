@@ -20,6 +20,8 @@ export default function AdminDashboard() {
   const { colors } = useAppTheme();
   const [summary, setSummary] = useState<Summary>({});
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [weekOffCount, setWeekOffCount] = useState<number | null>(null);
+  const [supportCount, setSupportCount] = useState<number | null>(null);
   const [holidayCount, setHolidayCount] = useState<number | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [requestsLoading, setRequestsLoading] = useState(false);
@@ -56,6 +58,30 @@ export default function AdminDashboard() {
       })
       .finally(() => setRequestsLoading(false));
 
+    const weekOffPromise = adminRequest<any[]>('/api/leaves/all', { clientId: adminSession.id })
+      .then((rows) => {
+        const count = (Array.isArray(rows) ? rows : []).filter((request) => {
+          const type = String(request?.leaveType || '').toLowerCase();
+          const status = String(request?.status || '').toLowerCase();
+          return status === 'pending' && (type.includes('weekoff') || type.includes('week off'));
+        }).length;
+        setWeekOffCount(count);
+      })
+      .catch((err) => {
+        console.error('[AdminDashboard] week off count failed', err);
+        setWeekOffCount(0);
+      });
+
+    const supportPromise = adminRequest<any[]>('/api/attendance-support', {
+      clientId: adminSession.id,
+      query: { status: 'PENDING', requestType: 'Attendance Support' },
+    })
+      .then((rows) => setSupportCount(Array.isArray(rows) ? rows.length : 0))
+      .catch((err) => {
+        console.error('[AdminDashboard] support count failed', err);
+        setSupportCount(0);
+      });
+
     const holidaysPromise = adminRequest<any[]>('/api/admin/holidays', { clientId: adminSession.id })
       .then((rows) => setHolidayCount(Array.isArray(rows) ? rows.length : 0))
       .catch((err) => {
@@ -64,7 +90,7 @@ export default function AdminDashboard() {
       })
       .finally(() => setHolidaysLoading(false));
 
-    await Promise.allSettled([summaryPromise, requestsPromise, holidaysPromise]);
+    await Promise.allSettled([summaryPromise, requestsPromise, weekOffPromise, supportPromise, holidaysPromise]);
   }, [adminSession?.id]);
 
   useEffect(() => {
@@ -144,11 +170,19 @@ export default function AdminDashboard() {
             style={styles.gridCard}
           />
           <AdminCard
-            title="Notifications"
-            value={pendingCount ?? 0}
-            subtitle="Pending approvals"
+            title="Week Off Requests"
+            value={weekOffCount ?? 0}
+            subtitle="Pending swap requests"
             loading={requestsLoading}
-            onPress={() => router.push('/AdminLeavePermissions')}
+            onPress={() => router.push({ pathname: '/AdminLeavePermissions', params: { type: 'weekoff' } })}
+            style={styles.gridCard}
+          />
+          <AdminCard
+            title="Support Requests"
+            value={supportCount ?? 0}
+            subtitle="Attendance corrections"
+            loading={requestsLoading}
+            onPress={() => router.push('/AdminSupportRequests')}
             style={styles.gridCard}
           />
           <AdminCard

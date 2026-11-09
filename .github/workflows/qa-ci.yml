@@ -8,6 +8,8 @@ name: ZenTime QA CI
 
 permissions:
   contents: read
+  actions: read
+  checks: write
 
 jobs:
   backend-tests:
@@ -38,7 +40,79 @@ jobs:
         run: chmod +x ./mvnw
 
       - name: Run backend unit and integration tests
+        id: backend-tests
+        continue-on-error: true
         run: ./mvnw -B test
+
+      - name: Publish backend test results
+        if: always()
+        uses: dorny/test-reporter@v2
+        with:
+          name: Backend JUnit Results
+          working-directory: backend
+          path: target/surefire-reports/TEST-*.xml
+          reporter: java-junit
+          fail-on-error: "false"
+
+      - name: Upload backend test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-surefire-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: warn
+
+      - name: Surface backend test failure
+        if: steps.backend-tests.outcome == 'failure'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+
+          reports = sorted(Path("target/surefire-reports").glob("TEST-*.xml"))
+          failures = []
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for case in root.findall(".//testcase"):
+                  failure = case.find("failure")
+                  if failure is None:
+                      failure = case.find("error")
+                  if failure is not None:
+                      summary = (failure.get("message") or "Test failed").strip()[:400]
+                      trace = (failure.text or "").strip()
+                      detail = f"{summary}\n{trace[-8000:]}" if trace else summary
+                      failures.append(f"{case.get('classname')}.{case.get('name')}: {detail}")
+          if failures:
+              message = failures[0]
+          else:
+              dumps = []
+              for pattern in ("*.dump", "*.dumpstream"):
+                  for dump in sorted(Path("target/surefire-reports").glob(pattern)):
+                      text = dump.read_text(errors="replace").strip()
+                      if text:
+                          blocks = text.split('\n"')
+                          relevant = next(
+                              (block for block in blocks[1:]
+                               if "SpringApplicationShutdownHook" in block),
+                              None,
+                          )
+                          if relevant is None:
+                              relevant = next(
+                                  (block for block in blocks[1:]
+                                   if any(token in block for token in (
+                                       "Testcontainers", "Ryuk", "Hikari",
+                                       "ApplicationShutdownHooks"))),
+                                  blocks[-1],
+                              )
+                          thread_names = [line.split('"', 2)[1] for line in text.splitlines()
+                                          if line.startswith('"') and '"' in line]
+                          summary = relevant.replace("\n", " ")[:1000]
+                          dumps.append(
+                              f"{dump.name}: threads={thread_names[:20]}; shutdown detail={summary}")
+              message = dumps[0] if dumps else "Maven failed before producing a JUnit failure report or Surefire JVM dump."
+          print(f"::error title=Backend test failure::{message}")
+          PY
+          exit 1
 
   admin-build:
     name: Admin Build

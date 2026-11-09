@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, RefreshControl, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { AdminPage, EmptyState, ErrorBanner, SegmentButton } from '../components/admin/AdminShared';
@@ -8,10 +8,18 @@ import { useAppTheme } from '../context/AppThemeContext';
 import { adminRequest, fetchAdminBranches, getDisplayName } from '../lib/adminApi';
 
 type StatusTab = 'pending' | 'approved' | 'rejected';
-type TypeTab = 'leave' | 'permission';
+type TypeTab = 'leave' | 'permission' | 'weekoff';
+
+const getRequestType = (leaveType: unknown): TypeTab => {
+  const normalized = String(leaveType || '').trim().toLowerCase();
+  if (normalized === 'permission') return 'permission';
+  if (normalized.includes('weekoff') || normalized.includes('week off')) return 'weekoff';
+  return 'leave';
+};
 
 export default function AdminLeavePermissions() {
   const router = useRouter();
+  const { type } = useLocalSearchParams<{ type?: string }>();
   const { adminSession, adminReady } = useAdminSession();
   const { colors } = useAppTheme();
   const [requests, setRequests] = useState<any[]>([]);
@@ -26,6 +34,13 @@ export default function AdminLeavePermissions() {
   useEffect(() => {
     if (adminReady && !adminSession) router.replace('/AdminLogin');
   }, [adminReady, adminSession, router]);
+
+  useEffect(() => {
+    const requestedType = String(type || '').toLowerCase();
+    if (requestedType === 'permission' || requestedType === 'weekoff' || requestedType === 'leave') {
+      setTypeTab(requestedType);
+    }
+  }, [type]);
 
   useEffect(() => {
     let active = true;
@@ -68,9 +83,7 @@ export default function AdminLeavePermissions() {
   const visibleRequests = useMemo(() => {
     return requests.filter((request) => {
       const status = String(request?.status || '').toLowerCase();
-      const leaveType = String(request?.leaveType || '').toLowerCase();
-      const isPermission = leaveType === 'permission';
-      return status === statusTab && (typeTab === 'permission' ? isPermission : !isPermission);
+      return status === statusTab && getRequestType(request?.leaveType) === typeTab;
     });
   }, [requests, statusTab, typeTab]);
 
@@ -98,7 +111,7 @@ export default function AdminLeavePermissions() {
   };
 
   return (
-    <AdminPage title="Leave / Permission" subtitle={`${visibleRequests.length} ${statusTab} requests`}>
+    <AdminPage title="Employee Requests" subtitle={`${visibleRequests.length} ${statusTab} ${typeTab} requests`}>
       <ScrollView
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={loadRequests} tintColor={colors.primary} />}
@@ -117,6 +130,7 @@ export default function AdminLeavePermissions() {
         <View style={styles.filterWrap}>
           <SegmentButton label="Leave" active={typeTab === 'leave'} onPress={() => setTypeTab('leave')} />
           <SegmentButton label="Permission" active={typeTab === 'permission'} onPress={() => setTypeTab('permission')} />
+          <SegmentButton label="Week Off" active={typeTab === 'weekoff'} onPress={() => setTypeTab('weekoff')} />
         </View>
 
         {!loading && visibleRequests.length === 0 ? <EmptyState message="No requests found." /> : null}

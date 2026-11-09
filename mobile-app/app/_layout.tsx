@@ -16,7 +16,7 @@ import {
 } from '@expo/vector-icons';
 import { EmployeeProvider } from '../context/EmployeeContext';
 import { EmployeeContext } from '../context/EmployeeContext';
-import { AdminSessionProvider } from '../context/AdminSessionContext';
+import { AdminSessionProvider, useAdminSession } from '../context/AdminSessionContext';
 import { useNotificationSetup } from '../useNotificationSetup';
 import { buildApiUrl } from '../lib/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,7 +30,9 @@ import * as SystemUI from 'expo-system-ui';
 const NotificationRegistrar = () => {
   const expoPushToken = useNotificationSetup();
   const { employee } = useContext(EmployeeContext);
+  const { adminSession } = useAdminSession();
   const [lastRegisteredToken, setLastRegisteredToken] = useState<string | null>(null);
+  const [lastRegisteredAdminToken, setLastRegisteredAdminToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (!expoPushToken) return;
@@ -65,6 +67,37 @@ const NotificationRegistrar = () => {
 
     register();
   }, [employee, expoPushToken, lastRegisteredToken]);
+
+  useEffect(() => {
+    if (!adminSession?.id || !expoPushToken) return;
+
+    const registrationKey = `${adminSession.id}:${expoPushToken}`;
+    if (registrationKey === lastRegisteredAdminToken) return;
+
+    const register = async () => {
+      try {
+        const response = await fetch(buildApiUrl(`/api/clients/${adminSession.id}/push-token`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: expoPushToken }),
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.warn(
+            `Failed to register admin push token (HTTP ${response.status}):`,
+            errorText || 'No response body'
+          );
+          return;
+        }
+        console.log('Admin push token registered for client:', adminSession.id);
+        setLastRegisteredAdminToken(registrationKey);
+      } catch (err) {
+        console.warn('Failed to register admin push token:', err);
+      }
+    };
+
+    register();
+  }, [adminSession?.id, expoPushToken, lastRegisteredAdminToken]);
 
   return null;
 };
@@ -122,6 +155,7 @@ function LayoutContent() {
           <Stack.Screen name="AdminEmployeeDetails" options={{ headerShown: false }} />
           <Stack.Screen name="AdminAttendanceList" options={{ headerShown: false }} />
           <Stack.Screen name="AdminLeavePermissions" options={{ headerShown: false }} />
+          <Stack.Screen name="AdminSupportRequests" options={{ headerShown: false }} />
           <Stack.Screen name="AdminHolidays" options={{ headerShown: false }} />
           <Stack.Screen name="WelcomeBack" options={{ headerShown: false }} />
           <Stack.Screen name="MarkAttendance" options={{ headerShown: false }} />

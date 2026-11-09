@@ -7,6 +7,7 @@ import com.example.demo.MODELS.Employee;
 import com.example.demo.repo.AttendanceRecordRepository;
 import com.example.demo.repo.AttendanceSupportRequestRepository;
 import com.example.demo.repo.EmployeeRepository;
+import com.example.demo.service.PushNotificationService;
 import com.example.demo.service.RequestFilterService;
 import com.example.demo.service.SchemaMaintenanceService;
 import org.slf4j.Logger;
@@ -30,6 +31,7 @@ public class AttendanceSupportRequestController {
     private final AttendanceSupportRequestRepository supportRepository;
     private final AttendanceRecordRepository attendanceRecordRepository;
     private final EmployeeRepository employeeRepository;
+    private final PushNotificationService pushNotificationService;
     private final RequestFilterService requestFilterService;
     private final SchemaMaintenanceService schemaMaintenanceService;
     private static final String TYPE_ATTENDANCE = "Attendance Support";
@@ -40,11 +42,13 @@ public class AttendanceSupportRequestController {
             AttendanceSupportRequestRepository supportRepository,
             AttendanceRecordRepository attendanceRecordRepository,
             EmployeeRepository employeeRepository,
+            PushNotificationService pushNotificationService,
             RequestFilterService requestFilterService,
             SchemaMaintenanceService schemaMaintenanceService) {
         this.supportRepository = supportRepository;
         this.attendanceRecordRepository = attendanceRecordRepository;
         this.employeeRepository = employeeRepository;
+        this.pushNotificationService = pushNotificationService;
         this.requestFilterService = requestFilterService;
         this.schemaMaintenanceService = schemaMaintenanceService;
     }
@@ -117,7 +121,9 @@ public class AttendanceSupportRequestController {
         if (body.approvedMinutes != null) {
             request.setApprovedMinutes(Math.max(0, body.approvedMinutes));
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(supportRepository.save(request)));
+        AttendanceSupportRequest savedRequest = supportRepository.save(request);
+        pushNotificationService.notifyNewSupportRequest(savedRequest);
+        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(savedRequest));
     }
 
     @PostMapping("/{requestId}/approve")
